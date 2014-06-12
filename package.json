@@ -1,0 +1,22 @@
+{
+  "name": "ofxer",
+  "version": "0.0.0",
+  "description": "OFX importer for ledger-cli (3.0)",
+  "main": "ofxer.js",
+  "dependencies": {
+    "async": "^0.9.0",
+    "lodash-node": "^2.4.1",
+    "colors": "^0.6.2",
+    "classifier": "^0.1.0",
+    "minimist": "^0.1.0",
+    "prompt": "^0.2.13",
+    "moment": "^2.6.0",
+    "sprintf-js": "^0.0.7"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Craig Rindt <crindt@activimetrics.com>",
+  "license": "ISC"
+}
