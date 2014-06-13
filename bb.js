@@ -2,13 +2,15 @@ var spawn = require('child_process').spawn,
 child;
 var async = require('async')
 var classifier = require('classifier')
-var _ = require("lodash");
+var _ = require("lodash-node");
 var argv = require("minimist")(
   process.argv.slice(2),
   { string: [ 'b', 'e', 'a' ] }
 );
 var moment = require('moment');
 var amountMeta = require('./funcs.js').amountMeta;
+var Xact = require('./funcs.js').Xact;
+var stripXact = require('./funcs.js').stripXact;
 
 var args = ["-f", argv.f, "xml", "reg", argv.a, "-r"];
 if ( argv.b ) { args.push("-b");args.push(argv.b) }
@@ -46,41 +48,29 @@ child.on("close",function(code) {
     var transactions = ledger.transactions[0].transaction
     console.log((transactions?transactions.length:0)+" transactions");
     var cnt = 0;
-    async.eachLimit(transactions, 30, function(xact, cb) {
-      var payee = xact.payee[0];
-      console.log(payee);
-      var postings = xact.postings[0].posting;
-      console.log("xact "+(cnt++)+": "+postings.length)
-      var no = cnt;
-      var tot = 0
-      _.each(postings,function(p) {
-        tot += parseFloat(p['post-amount'][0].amount[0].quantity[0])
-      });
+    async.eachLimit(transactions, 30, function(xactxml, cb) {
 
-      var adds = []
-      adds.push( amountMeta(tot) )
+      console.log("XACTXML:"+JSON.stringify(xactxml));
+      var xact = new Xact(xactxml, argv.a);
+      console.log("XACT:"+JSON.stringify(xact));
 
-      var key = _.flatten([payee,adds]).join(" ")
+      var no = cnt++;
+      var tot = xact.total()
 
-      var pdate = moment(xact.date[0])
-      console.log("date: "+pdate.year());      
+      var year = xact.date.year()
 
       if ( argv.train ) {
         //var val = postings.length > 1 ? "SPLIT" : postings[0].account[0].name
-        var val = ""
-        val = [];
-        _.each(postings, function( p ) {
-          console.log(JSON.stringify(p));
 
-          // only record nonzero splits
-          var pamt = parseFloat(p['post-amount'][0].amount[0].quantity[0])/tot
-          if ( pamt != 0 )
-            val.push( { name: p.account[0].name[0], frac: pamt } );
-        });
-        val = JSON.stringify(val);
+        var tkey = xact.tkey(); // compute the key using actual values
+
+        var xact_stripped = stripXact( xact );
+
+        var val = JSON.stringify(xact_stripped);
+        console.log("VAL: "+JSON.stringify(xact_stripped))
 
         // train for post year and following two years
-        var years = [pdate.year(),pdate.year()+1,pdate.year()+2];
+        var years = [year,year+1,year+2];
 
         async.each(years,function(y, cb2) {
           var bayes = new classifier.Bayesian({
@@ -98,9 +88,9 @@ child.on("close",function(code) {
             }
           });
           
-          bayes.train(key,
+          bayes.train(tkey,
                       val, function() {
-                        console.log("trained ("+no+") for year "+y+": '"+key+"->"+val);
+                        console.log("trained ("+no+") for year "+y+": '"+tkey+"->"+val);
                         cb2()
                       })
         }, function(err) {
