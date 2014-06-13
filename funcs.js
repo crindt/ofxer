@@ -1,5 +1,8 @@
 var _ = require("lodash-node");
 var moment = require('moment');
+var async = require('async')
+var classifier = require('classifier');
+var Levenshtein = require('levenshtein')
 
 var amountMeta = function(tot) {
   var meta = []
@@ -95,7 +98,7 @@ var Xact = function(data, acct) {
   }
   //console.log(JSON.stringify(this,null,'  '))
 
-  this.amount = function() { return this.postings.slice(-1).pop().amt.val }
+  this.amount = function() { return parseFloat(this.postings.slice(-1).pop().amt.val) }
   this.acct   = function() { 
     var pp = this.postings.slice(-1).pop();
     if ( !pp.account ) return "UNKNOWN:"+JSON.stringify(pp)
@@ -132,6 +135,7 @@ function stripXact( xact ) {
   var tot = xact_stripped.total()
   _.each(xact_stripped.postings,function(p) {
     p.amt.val = p.amt.val/tot;
+    _.each(['fitid','metadata','$'], function(k) { delete p[k] });
   });
   
   // remove items we don't want to capture
@@ -140,8 +144,83 @@ function stripXact( xact ) {
 }
 
 
+var classifiers = {}
+
+function getClassifier(key,xact) {
+  if ( !key ) throw new Error("MUST SPECIFY KEY!")
+  var ybkey = [key,xact.bkey()].join(":")
+  if ( !classifiers[ybkey] ) {
+    classifiers[ybkey] = new classifier.Bayesian({
+      backend: {
+        type: 'Redis',
+        options: {
+          hostname: 'localhost',   // default
+          port: 6379,              // default
+          name: ybkey // namespace for persisting
+        },
+        thresholds: {
+          "Expenses:Groceries:Food": 1,
+          "Expenses:Groceries:Alcohol": 3
+        }
+      }
+    });
+  }
+  return classifiers[ybkey]
+}
+
+function doTrain(key,xact,cb) {
+
+  if ( !key ) throw new Error("MUST SPECIFY KEY!")
+
+  // train for post year and following two years
+  var pyear = moment(xact.date).year()
+  var years = [pyear,pyear+1,pyear+2];
+
+  async.each(years,function(y, cb2) {
+    var ybkey = [key,y,xact.acct()].join(":")
+    if ( !classifiers[ybkey] ) {
+      classifiers[ybkey] = new classifier.Bayesian({
+        backend: {
+          type: 'Redis',
+          options: {
+            hostname: 'localhost',   // default
+            port: 6379,              // default
+            name: ybkey // namespace for persisting
+          },
+          thresholds: {
+            "Expenses:Groceries:Food": 1,
+            "Expenses:Groceries:Alcohol": 3
+          }
+        }
+      });
+    }
+
+    var xact_stripped = stripXact( xact );
+    var val = JSON.stringify( xact_stripped )
+
+    classifiers[ybkey].train(xact.tkey(),
+                            val, function() {
+                              console.log("trained for ["+ybkey+"] '"+xact.tkey()+"' ->"+val);
+                              cb2()
+                            })
+  }, function(err) {
+    cb(err)
+  })
+}
+
+// scored difference between transactions
+function exDist(a, b) {
+  // payee similarity, scaled by first payee length
+  var ld = new Levenshtein(a.payee.toUpperCase(),b.payee.toUpperCase()).distance/a.payee.length
+  // absolute pct distance (as a decimal) of the two amounts
+  var ad = Math.abs(b.amount() - a.amount())/Math.abs(a.amount())
+  return ld + ad
+}
 
 exports.amountMeta = amountMeta;
 exports.Xact = Xact;
 exports.dp2date = dp2date;
 exports.stripXact = stripXact;
+exports.doTrain = doTrain;
+exports.getClassifier = getClassifier;
+exports.exDist = exDist;

@@ -4,7 +4,7 @@ var fs = require('fs');
 var ofx = require('ofx');
 var argv = require("minimist")(
   process.argv.slice(2),
-  { string: [ 'f', 'l' ],
+  { string: [ 'f', 'l', 'key' ],
     boolean: [ 'train' ]
   }
 );
@@ -19,7 +19,14 @@ var amountMeta = require('./funcs.js').amountMeta;
 var Xact = require('./funcs.js').Xact;
 var dp2date = require('./funcs.js').dp2date;
 var stripXact = require('./funcs.js').stripXact;
+var doTrain = require('./funcs.js').doTrain;
+var getClassifier = require('./funcs.js').getClassifier;
+var exDist = require('./funcs.js').exDist;
 var dtf = "YYYY-MM-DD"
+
+if ( ! argv.key ) {
+  throw new Error("GOTTA SPECIFY THE FILE KEY")
+}
 
 colors.setTheme({
   info: 'blue',
@@ -27,8 +34,6 @@ colors.setTheme({
   trial: 'yellow',
   selected: 'green'
 });
-
-var indent = '   ';
 
 // Closure
 (function(){
@@ -142,7 +147,7 @@ function ofx2ledger(dt, name, notes, acct, tamt, split, trial) {
   console.log(sprintf("    %-60s    $%10.2f", acct, tamt));
 }
 
-function xact2ledger(xact, status) {
+function xact2ledger(xact, status, indent) {
   function emit(str) {
     if ( status )
       console.log(indent+str[status])
@@ -161,42 +166,6 @@ function xact2ledger(xact, status) {
     emit(sprintf("    %-60s    $%10.2f", p.account.name, -p.amt.val))
     tamt += p.amt.val;
   });
-}
-
-
-function doTrain(bkey,xact,cb) {
-
-  // train for post year and following two years
-  var pyear = moment(xact.date).year()
-  var years = [pyear,pyear+1,pyear+2];
-
-  async.each(years,function(y, cb2) {
-    var bayes2 = new classifier.Bayesian({
-      backend: {
-        type: 'Redis',
-        options: {
-          hostname: 'localhost', // default
-          port: 6379,            // default
-          name: bkey           // namespace for persisting
-        },
-        thresholds: {
-          "Expenses:Groceries:Food": 1,
-          "Expenses:Groceries:Alcohol": 3
-        }
-      }
-    });
-
-    var xact_stripped = stripXact( xact );
-    var val = JSON.stringify( xact_stripped )
-
-    bayes2.train(xact.tkey(),
-                 val, function() {
-                   console.log("trained for "+xact.bkey()+": '"+xact.tkey()+"->"+val);
-                   cb2()
-                 })
-  }, function(err) {
-    cb(err)
-  })
 }
 
 function ledger2split(acct, xact, expect) {
@@ -348,16 +317,18 @@ async.waterfall([
     var stmt = ofx2stmt(ofx).stmt
     var pfx  = ofx2stmt(ofx).pfx
 
+    var adds = []
+
     async.eachSeries(stmt["BANKTRANLIST"].STMTTRN.reverse(), function( ofxxact, cb ) {
       var xact_ofx = new Xact(ofxxact, acct.acct)
       xact_ofx.postings[0].account = {name: 'unspecified'}
       xact_ofx.metadata.source = 'rawofx'
-      console.log("\nOFX TRANSACTION...".red)
-      xact2ledger(xact_ofx, 'trial')
+      console.log("\n===============================================\nOFX TRANSACTION...".red)
+      xact2ledger(xact_ofx, 'trial', '   ')
+      console.log("===============================================".red)
 
 
       var tkey = xact_ofx.tkey()
-      var bkey = xact_ofx.bkey()
 
       if ( fitdb[xact_ofx.fitid()] ) {
         console.log([tkey,"already a transaction:",xact_ofx.fitid()].join(" ").info)
@@ -376,7 +347,8 @@ async.waterfall([
             b.subtract('days',7)
             var e = xact_ofx.date.clone()
             e.add('days',7)
-            processLedger(argv.l, acct.acct, "(amount>"+((-amt)-0.01)+") and (amount<"+((-amt)+0.01)+")", ['-b', b.format(dtf), '-e', e.format(dtf)], function(l2) {
+            var window = Math.abs(amt)*0.25  // 5%
+            processLedger(argv.l, acct.acct, "(amount>"+((-amt)-window)+") and (amount<"+((-amt)+window)+")", ['-b', b.format(dtf), '-e', e.format(dtf)], function(l2) {
 
               var existingsplits = []
               var lxacts = l2.transactions[0].transaction;
@@ -385,6 +357,9 @@ async.waterfall([
                 var xact_led = new Xact(lxact, acct.acct)
                 existingsplits.push(xact_led)
               });
+              existingsplits = existingsplits.sort(function(a,b) {
+                return exDist(a,xact_ofx) - exDist(b,xact_ofx)
+              })
               cb2(null, existingsplits);
             })
           },
@@ -392,24 +367,12 @@ async.waterfall([
           function bayesianMatch(exsplits, cb2) {
             if ( argv.verbose ) console.log("...BAYESIAN?".info)
 
-            var bayes = new classifier.Bayesian({
-              backend: {
-                type: 'Redis',
-                options: {
-                  hostname: 'localhost', // default
-                  port: 6379,            // default
-                  name: bkey      // namespace for persisting
-                },
-                thresholds: {
-                  "Expenses:Groceries:Food": 1,
-                  "Expenses:Groceries:Alcohol": 3
-                }
-              }
-            });
+            var bayes = getClassifier(argv.key, xact_ofx)
 
             bayes.classify(tkey, function(category) {
               if ( category === 'unclassified' ) {
-                cb2("UNCLASSIFIED!", exsplits, null)
+                cb2(null, exsplits, null)
+
               } else {
                 var xact_bayes = _.merge(new Xact(),xact_ofx);
                 var guess = _.pick(JSON.parse(category), function(v,k) { return k.match(/^(postings)/)})
@@ -430,26 +393,35 @@ async.waterfall([
           function showOptions(exsplits, xact_bayes, cb2) {
 
             var cnt = 0;
+            var choices = ["x","s"]
+            var defaults = []
 
             _.each(exsplits, function(xact) {
-              console.log(indent+"\n"+((cnt++)+") EXISTING TRANSACTION").info)
-              xact2ledger(xact, 'trial')
-            })
-              
-              console.log(indent+"\nb) BEST BAYESIAN GUESS:".info)
-            //ofx2ledger(dp2date(xact.DTPOSTED), xact.NAME, [xact.MEMO, "FITID: "+xact.fitid], parseFloat(xact.TRNAMT), true)
-            xact2ledger(xact_bayes, 'trial')
-            
-            console.log(indent+"\nx) USE RAW OFX".info)
-            
-            console.log(indent+"\ns) MANUALLY SPECIFY SPLITS".info)
-
-            var patt = /^[xsb]$/i
-            var dflt = 'b'
+              defaults.push(cnt)
+              console.log(('   '+"\n"+cnt+") EXISTING TRANSACTION ["+exDist(xact,xact_ofx)+"]").info)
+              xact2ledger(xact, 'trial', '   ')
+              cnt++
+            });
             if ( exsplits.length > 0 ) {
-              patt = /([\d]+|[xsb])/i
-              dflt = 0
+              choices.push('\\d+')
             }
+
+            if ( xact_bayes ) {
+              console.log('   '+"\nb) BEST BAYESIAN GUESS:".info)
+              //ofx2ledger(dp2date(xact.DTPOSTED), xact.NAME, [xact.MEMO, "FITID: "+xact.fitid], parseFloat(xact.TRNAMT), true)
+              xact2ledger(xact_bayes, 'trial', '   ')
+              choices.push("b")
+              defaults.push("b")
+            }
+            
+            console.log('   '+"\ns) MANUALLY SPECIFY SPLITS".info)
+            defaults.push("s")
+            
+            console.log('   '+"\nx) USE RAW OFX".info)
+            defaults.push("x")
+
+            patt = new RegExp("("+choices.join("|")+")","i")
+            var dflt = defaults[0]
 
             prompt.start()
             prompt.get({
@@ -479,12 +451,14 @@ async.waterfall([
               console.log("Specify Splits...")
               // FIXME
               readSplits(xact_ofx, function(err, xact_new) {
-                cb2(err, xact)
+                adds.push(xact_new)
+                cb2(err, xact_new)
               });
 
             } else if ( result.split === 'b' ) {
 
-                cb2(null, xact_bayes)
+              adds.push(xact_bayes)
+              cb2(null, xact_bayes)
 
             } else {
               var splitno = parseInt(result.split)
@@ -505,7 +479,7 @@ async.waterfall([
           function emitMatch(xact_chosen, cb2) {
 
             // apply FITID
-            xact2ledger(xact_chosen, 'selected')
+            xact2ledger(xact_chosen, 'selected', '   ')
 
             cb2(null, xact_chosen)
 
@@ -515,7 +489,7 @@ async.waterfall([
 
             if ( argv.train && !(xact_chosen.metadata.source=="rawofx") ) {
               
-              doTrain(bkey, xact_chosen, function(err) {
+              doTrain(argv.key, xact_chosen, function(err) {
                 cb2(err, xact_chosen)
               });
             } else {
@@ -525,6 +499,12 @@ async.waterfall([
 
         ], function matchError(err, result) {
           if ( err ) cb(err);
+
+          // WRITE OUT ALL ADDS
+          _.each(adds,function(xact_add) {
+            xact2ledger(xact_add)
+          })
+
           cb(null, result);
         })
       }

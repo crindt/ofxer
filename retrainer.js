@@ -11,10 +11,16 @@ var moment = require('moment');
 var amountMeta = require('./funcs.js').amountMeta;
 var Xact = require('./funcs.js').Xact;
 var stripXact = require('./funcs.js').stripXact;
+var doTrain = require('./funcs.js').doTrain;
 
 var args = ["-f", argv.f, "xml", "reg", argv.a, "-r"];
 if ( argv.b ) { args.push("-b");args.push(argv.b) }
 if ( argv.e ) { args.push("-e");args.push(argv.e) }
+
+if ( ! argv.key ) {
+  throw new Error("GOTTA SPECIFY THE FILE KEY")
+}
+
 
 console.log("ledger ",_.map(args,function(a) { 
   return a.match(/-/) ? a : '"'+a+'"';
@@ -50,9 +56,9 @@ child.on("close",function(code) {
     var cnt = 0;
     async.eachLimit(transactions, 30, function(xactxml, cb) {
 
-      console.log("XACTXML:"+JSON.stringify(xactxml));
+      if ( argv.verbose ) console.log("XACTXML:"+JSON.stringify(xactxml));
       var xact = new Xact(xactxml, argv.a);
-      console.log("XACT:"+JSON.stringify(xact));
+      if ( argv.verbose ) console.log("XACT:"+JSON.stringify(xact));
 
       var no = cnt++;
       var tot = xact.total()
@@ -62,62 +68,15 @@ child.on("close",function(code) {
       if ( argv.train ) {
         //var val = postings.length > 1 ? "SPLIT" : postings[0].account[0].name
 
-        var tkey = xact.tkey(); // compute the key using actual values
-
-        var xact_stripped = stripXact( xact );
-
-        var val = JSON.stringify(xact_stripped);
-        console.log("VAL: "+JSON.stringify(xact_stripped))
-
-        // train for post year and following two years
-        var years = [year,year+1,year+2];
-
-        async.each(years,function(y, cb2) {
-          var bayes = new classifier.Bayesian({
-            backend: {
-              type: 'Redis',
-              options: {
-                hostname: 'localhost', // default
-                port: 6379,            // default
-                name: [y,argv.a].join(":")           // namespace for persisting
-              },
-              thresholds: {
-                "Expenses:Groceries:Food": 1,
-                "Expenses:Groceries:Alcohol": 3
-              }
-            }
-          });
-          
-          bayes.train(tkey,
-                      val, function() {
-                        console.log("trained ("+no+") for year "+y+": '"+tkey+"->"+val);
-                        cb2()
-                      })
-        }, function(err) {
-          if (err) { 
-            console.log("ERROR TRAINING FOR YEAR",err)
-            process.exit(1)
-          }
-          cb()
+        doTrain(argv.key, xact, function(err) {
+          cb( err, xact )
         })
-      } else {
-        var bayes = new classifier.Bayesian({
-          backend: {
-            type: 'Redis',
-            options: {
-              hostname: 'localhost', // default
-              port: 6379,            // default
-              name: [pdate.year,argv.a].join(":")           // namespace for persisting
-            },
-            thresholds: {
-              "Expenses:Groceries:Food": 1,
-              "Expenses:Groceries:Alcohol": 3
-            }
-          }
-        });
 
-        bayes.classify(key, function(category) {
-          console.log(key+" classified in: " + category);
+      } else {
+        var bayes = getClassifier(argv.key, xact.bkey(), xact)
+
+        bayes.classify(xact.tkey(), function(category) {
+          console.log(xact.tkey()+" classified in: " + category);
           cb()
         });        
       }
