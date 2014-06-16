@@ -8,10 +8,10 @@ var argv = require("minimist")(
   { string: [ 'b', 'e', 'a' ] }
 );
 var moment = require('moment');
-var amountMeta = require('./funcs.js').amountMeta;
-var Xact = require('./funcs.js').Xact;
-var stripXact = require('./funcs.js').stripXact;
-var doTrain = require('./funcs.js').doTrain;
+var amountMeta = require(__dirname+'/funcs.js').amountMeta;
+var Xact = require(__dirname+'/funcs.js').Xact;
+var stripXact = require(__dirname+'/funcs.js').stripXact;
+var doTrain = require(__dirname+'/funcs.js').doTrain;
 
 var args = ["-f", argv.f, "xml", "reg", argv.a, "-r"];
 if ( argv.b ) { args.push("-b");args.push(argv.b) }

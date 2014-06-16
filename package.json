@@ -9,7 +9,7 @@
     "colors": "^0.6.2",
     "classifier": "^0.1.0",
     "minimist": "^0.1.0",
-    "prompt": "^0.2.13",
+    "prompt": "crindt/prompt",
     "moment": "^2.6.0",
     "sprintf-js": "^0.0.7",
     "ofx": "^0.2.0",

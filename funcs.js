@@ -42,6 +42,8 @@ var Xact = function(data, acct) {
 
     this.date = moment(data.date[0])
     this.payee = this.payee[0]
+    if ( this.note ) 
+      this.note = this.note.join("").replace(/^.*:\s/)  // remove metadata from note
 
     // get splits
     var tot = 0;
@@ -53,6 +55,19 @@ var Xact = function(data, acct) {
       // only record nonzero splits
       var pamt = p['post-amount'][0]
       var amt = convertAmount(pamt)
+      if ( p.note ) p.note = p.note.join("").replace(/^.*:\s/) // remove metdata from note
+
+      var pp = {}
+      if ( p.metadata ) {
+        _.each(p.metadata, function(m) {
+          _.each(m.value, function (mv) {
+            var k = mv['$'].key
+            var v = mv.string ? mv.string : mv.value
+            pp[k] = v;
+          });
+        });
+      }
+      p.metadata = pp
       delete p['post-amount']
       delete p.total
       p.amt = amt;
@@ -62,7 +77,8 @@ var Xact = function(data, acct) {
       }
     });
     ps.push( { account: { name: acct },
-               amt: { cmdty: '$' , val: -tot } })
+               amt: { cmdty: '$' , val: -tot },
+               metadata: {} })
     this.postings = ps;
 
     // get metadata
@@ -81,15 +97,18 @@ var Xact = function(data, acct) {
     this.date = dp2date(data.DTPOSTED)
     this.payee = data.NAME
     this.memo = data.MEMO
-    this.metadata = { fitid: data.FITID }
+    if ( data.CHECKNUM ) this.num = parseInt(data.CHECKNUM)
+    this.metadata = {}
     
     // dummy transaction
     var ps = []
     ps.push( { account: 0,
-               amt: { cmdty: '$', val: parseFloat(data.TRNAMT) } })
+               amt: { cmdty: '$', val: parseFloat(data.TRNAMT) }, 
+               metadata: {} })
 
     ps.push( { account: {name: acct},
-               amt: { cmdty: '$', val: -parseFloat(data.TRNAMT) } })
+               amt: { cmdty: '$', val: -parseFloat(data.TRNAMT) }, 
+               metadata: { fitid: data.FITID } } )
 
     this.postings = ps;
     
@@ -113,11 +132,13 @@ var Xact = function(data, acct) {
     var tkey = _.flatten([this.payee,adds]).join(" ")
     return tkey;
   }
+  this.targetpost = function() { return this.postings.slice(-1).pop() }
   this.total = function() {
-    return this.postings.slice(-1).pop().amt.val
+    return this.targetpost().amt.val
   }
   this.fitid = function() {
-    return (this.metadata.fitid?this.metadata.fitid:this.metadata.FITID)
+    var md = this.targetpost().metadata
+    return (md && md.fitid?md.fitid:null)
   }
     
 }

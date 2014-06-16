@@ -15,13 +15,13 @@ var classifier = require('classifier');
 var prompt = require('prompt');
 var sprintf = require('sprintf-js').sprintf;
 var colors = require('colors');
-var amountMeta = require('./funcs.js').amountMeta;
-var Xact = require('./funcs.js').Xact;
-var dp2date = require('./funcs.js').dp2date;
-var stripXact = require('./funcs.js').stripXact;
-var doTrain = require('./funcs.js').doTrain;
-var getClassifier = require('./funcs.js').getClassifier;
-var exDist = require('./funcs.js').exDist;
+var amountMeta = require(__dirname+'/funcs.js').amountMeta;
+var Xact = require(__dirname+'/funcs.js').Xact;
+var dp2date = require(__dirname+'/funcs.js').dp2date;
+var stripXact = require(__dirname+'/funcs.js').stripXact;
+var doTrain = require(__dirname+'/funcs.js').doTrain;
+var getClassifier = require(__dirname+'/funcs.js').getClassifier;
+var exDist = require(__dirname+'/funcs.js').exDist;
 var dtf = "YYYY-MM-DD"
 
 if ( ! argv.key ) {
@@ -90,12 +90,41 @@ colors.setTheme({
 var fitdb = {}
 
 
+function getAccounts(file,cb) {
+  var args = _.flatten([["-f", file, "accounts"]]);
+
+  if ( argv.verbose ) console.log("ledger ",_.map(args, function(a) { 
+    return a.match(/-/) ? a : '"'+a+'"';
+  }).join(" "))
+  child = spawn('ledger',args)
+  var data = ""
+  var errdata = ""
+
+  child.stderr.on('data',function(buf) {
+    errdata += buf.toString()
+  })
+
+
+  child.stdout.on('data',function(buf) {
+    data += buf.toString()
+  })
+
+  child.on("close",function(code) {
+    if ( argv.verbose ) console.log("CODE: "+code)
+    if ( errdata ) {
+      console.log(errdata)
+      process.exit(1)
+    }
+    cb(data.split(/\n/))
+  })
+}
+
 function processLedger(file, acct, cond, opts, cb) {
 
   var mycond = 'account=~/'+acct+'/'
   if ( cond ) mycond += "and ("+cond+")";
 
-  var args = _.flatten([["-f", file, "xml", "--limit", mycond, "-r"], opts]);
+  var args = _.flatten([["-f", file, "xml", "--limit", mycond, "-r", "--sort", "date"], opts]);
 
   if ( argv.verbose ) console.log("ledger ",_.map(args, function(a) { 
     return a.match(/-/) ? a : '"'+a+'"';
@@ -147,23 +176,37 @@ function ofx2ledger(dt, name, notes, acct, tamt, split, trial) {
   console.log(sprintf("    %-60s    $%10.2f", acct, tamt));
 }
 
+function mindent(s, ind) {
+//  console.log("indenting ",s,"by","'"+ind+"'")
+  return _.map(s.split(/\n/),function(ss) { return ind+ss }).join("\n")
+}
+
 function xact2ledger(xact, status, indent) {
+  if (!indent) indent = ""
   function emit(str) {
     if ( status )
-      console.log(indent+str[status])
+      console.log(mindent(str[status],indent))
     else
-      console.log(indent+str)
+      console.log(mindent(str,indent))
   }
   function emitif(val) { if ( val !== undefined ) emit(val) }
-  var line = [moment(xact.date).format('YYYY-MM-DD'), xact.payee].join(' ')
-  emitif(line)
-  emitif(xact.memo)
-  if ( xact.metadata ) _.each(xact.metadata, function(v,k) { emit('    ; '+[k,v].join(': ')); });
+  var ll = [moment(xact.date).format('YYYY-MM-DD')]
+  if ( xact.num ) ll.push('('+xact.num+')')
+  ll.push(xact.payee)
+  emitif(ll.join(' '))
+  emitif(xact.memo?"    ; "+xact.memo:xact.memo)
+  if ( xact.metadata ) _.each(xact.metadata, function(v,k) { emit(mindent([k,v].join(': '),'    ; ')); });
+  if ( xact.note ) emit(mindent(xact.note,"    ;"))
                                                                   
   var tamt = 0;
   _.each(xact.postings, function( p ) {
     //var amt = -Math.round10(s.frac*tamt,-2)
     emit(sprintf("    %-60s    $%10.2f", p.account.name, -p.amt.val))
+    if ( p.metadata ) _.each(p.metadata, function(v,k) { emit(mindent([k,JSON.stringify(v)].join(': '),'    ; ')); });
+    if ( p.note ) {
+      emit(mindent(p.note.join(""),"    ;"))
+    }
+
     tamt += p.amt.val;
   });
 }
@@ -190,11 +233,8 @@ function ledger2split(acct, xact, expect) {
   return val;
 }
 
-
-var gacct = {
-  "121000358:000913901777": { acct: "Assets:Current:BofA:Checking", type: "BANK" },
-  "377254746491008": { acct: "Liabilities:Credit Cards:AMEX True Earnings", type: "CC" },
-}
+var gacct = JSON.parse(fs.readFileSync("./accts.json"))
+console.log(JSON.stringify(gacct,null,'  '))
 
 
 function processOFX(cb) {
@@ -229,37 +269,72 @@ function ofx2stmt(ofx) {
   return {stmt:stmt,pfx:pfx}
 }
 
-function readSplits(xacta,cb) {
+function readSplits(xacta,accounts,cb) {
   var xact = _.cloneDeep(xacta)
 
   var newsplit = []
-  var left = parseFloat(xact.TRNAMT)
+  var left = xact.amount()
   async.whilst(
-    function() { return left != 0 },
+    function() { return Math.abs(left) > 0.009 },
     function(cbg) {
-      prompt.get({properties: {
-        "account": {
-          description: "Account? ",
-        },
-        "amount": {
-          description: "Amount ["+(left)+"]?",
-          pattern: /^-?(\d?\d?\d(,\d\d\d)*|\d+)(\.\d\d)?$/,
-          'default': (sprintf("%0.2f",-left))
+      async.whilst(
+        function () { return true },
+        function (cbw) {
+          prompt.get({properties: {
+            "account": {
+              description: "Account for ["+left+"]",
+              
+              completer: function(line) {
+                var completions = accounts
+                var hits = completions.filter(function(c) { return c.indexOf(line) == 0 })
+                // show all completions if none found
+                return [hits.length ? hits : completions, line]
+              }
+              
+            },
+            "amount": {
+              description: "    Amount",
+              pattern: /^-?(\d?\d?\d(,\d\d\d)*|\d+)(\.\d\d)?$/,
+              'default': (sprintf("%0.2f",left))
+            }
+          }}, function(err, res3) {
+            if ( err ) cbg(err);
+            if ( !_.find( accounts, function( a ) {return a == res3.account }) ) {
+              prompt.get({properties: {
+                "newac": {
+                  description: "Use new account "+res3.account+"?",
+                  pattern: /^(y(es)?|no?)\s*$/i,
+                  required: true
+                }
+              }}, function(err, res4) {
+                if ( res4.newac.match(/^y/i) ) {
+                  var amt = parseFloat(res3.amount)
+                  newsplit.push({account: { name:res3.account },
+                                 amt: { cmdty: '$', val: -amt }})
+                  left -= amt
+                  // add new account to accounts
+                  accounts.push(res3.account);
+                  cbg();
+                } else {
+                  cbw()
+                }
+              })
+            } else {
+              var amt = parseFloat(res3.amount)
+              newsplit.push({account: { name:res3.account },
+                             amt: { cmdty: '$', val: -amt }})
+              left -= amt
+              cbg();
+            }
+          })
         }
-      }}, function(err, res3) {
-        if ( err ) cbg(err);
-        console.log("AMOUNT READ: "+res3.amount)
-        var amt = parseFloat(res3.amount)
-        newsplit.push({account: { name:res3.account }},
-                      {amt: { cmdty: '$', val: -amt }})
-        left += parseFloat(amt)
-        cbg();
-      });
+      )
     },
     function whilstError(err) {
+      newsplit.push(xact.postings.slice(-1)[0])  // add original
       xact.postings = newsplit;
       xact.metadata.source = "manual"
-
+      
       cb(err, xact)
     });
 
@@ -309,17 +384,21 @@ async.waterfall([
       });
 
       if ( argv.verbose ) console.log("UPDATED FITDB".info)
-      cb(null,ofx, acct)
+
+      getAccounts(argv.l, function(accts) {
+        ledger.accounts = accts
+        cb(null,ofx, acct, ledger)
+      })
     })
   },
 
-  function findLedgerMatches(ofx, acct) {
+  function findLedgerMatches(ofx, acct, ledger, cb) {
     var stmt = ofx2stmt(ofx).stmt
     var pfx  = ofx2stmt(ofx).pfx
 
     var adds = []
 
-    async.eachSeries(stmt["BANKTRANLIST"].STMTTRN.reverse(), function( ofxxact, cb ) {
+    async.eachSeries(stmt["BANKTRANLIST"].STMTTRN.reverse(), function( ofxxact, cb2 ) {
       var xact_ofx = new Xact(ofxxact, acct.acct)
       xact_ofx.postings[0].account = {name: 'unspecified'}
       xact_ofx.metadata.source = 'rawofx'
@@ -332,13 +411,14 @@ async.waterfall([
 
       if ( fitdb[xact_ofx.fitid()] ) {
         console.log([tkey,"already a transaction:",xact_ofx.fitid()].join(" ").info)
+        cb2(null,fitdb[xact_ofx.fitid()])
 
       } else {
 
         if ( argv.verbose ) console.log("FINDING MATCHES".info)
 
         async.waterfall([
-          function matchExisting(cb2) {
+          function matchExisting(cb3) {
             if ( argv.verbose ) console.log("...EXISTING?".info)
 
             // see if matching transaction exists within one week on either side
@@ -360,18 +440,18 @@ async.waterfall([
               existingsplits = existingsplits.sort(function(a,b) {
                 return exDist(a,xact_ofx) - exDist(b,xact_ofx)
               })
-              cb2(null, existingsplits);
+              cb3(null, existingsplits);
             })
           },
 
-          function bayesianMatch(exsplits, cb2) {
+          function bayesianMatch(exsplits, cb3) {
             if ( argv.verbose ) console.log("...BAYESIAN?".info)
 
             var bayes = getClassifier(argv.key, xact_ofx)
 
             bayes.classify(tkey, function(category) {
               if ( category === 'unclassified' ) {
-                cb2(null, exsplits, null)
+                cb3(null, exsplits, null)
 
               } else {
                 var xact_bayes = _.merge(new Xact(),xact_ofx);
@@ -385,12 +465,18 @@ async.waterfall([
                 });
                 
                 xact_bayes.metadata.source = 'bayes'
-                cb2(null, exsplits, xact_bayes)
+                console.log(JSON.stringify(xact_bayes))
+                console.log(JSON.stringify(xact_bayes.targetpost()))
+                console.log(JSON.stringify(xact_bayes.targetpost().metadata))
+                var tp = xact_bayes.targetpost()
+                if ( !tp.metadata ) tp.metadata = {}
+                tp.metadata.fitid = xact_ofx.fitid()
+                cb3(null, exsplits, xact_bayes)
               }
             })
           },
 
-          function showOptions(exsplits, xact_bayes, cb2) {
+          function showOptions(exsplits, xact_bayes, cb3) {
 
             var cnt = 0;
             var choices = ["x","s"]
@@ -436,29 +522,29 @@ async.waterfall([
               }
             }, function (err, result) {
               console.log("GOT ",result.split)
-              cb2(err, exsplits, xact_bayes, result)
+              cb3(err, exsplits, xact_bayes, result)
             })
           },
 
-          function chooseMatch(exsplits, xact_bayes, result, cb2) {
+          function chooseMatch(exsplits, xact_bayes, result, cb3) {
             if ( result.split === 'x' ) {
               // cancel, unspecified
               
               console.log(JSON.stringify(xact_ofx))
-              cb2(null, xact_ofx)
+              cb3(null, xact_ofx)
 
             } else if ( result.split === 's' ) {
               console.log("Specify Splits...")
               // FIXME
-              readSplits(xact_ofx, function(err, xact_new) {
+              readSplits(xact_ofx, ledger.accounts, function(err, xact_new) {
                 adds.push(xact_new)
-                cb2(err, xact_new)
+                cb3(err, xact_new)
               });
 
             } else if ( result.split === 'b' ) {
 
               adds.push(xact_bayes)
-              cb2(null, xact_bayes)
+              cb3(null, xact_bayes)
 
             } else {
               var splitno = parseInt(result.split)
@@ -466,48 +552,52 @@ async.waterfall([
                 // chose existing split
 
                 var xact_existing   = exsplits[splitno]
-                xact_existing.metadata.fitid = xact_ofx.fitid()
+                xact_existing.targetpost().metadata.fitid = xact_ofx.fitid()
 
-                cb2(null, xact_existing)
+                cb3(null, xact_existing)
                 
               } else {
-                cb2("SHOULDN'T GET HERE!")
+                cb3("SHOULDN'T GET HERE!")
               }
             }
           },
 
-          function emitMatch(xact_chosen, cb2) {
+          function emitMatch(xact_chosen, cb3) {
 
             // apply FITID
             xact2ledger(xact_chosen, 'selected', '   ')
 
-            cb2(null, xact_chosen)
+            cb3(null, xact_chosen)
 
           },
 
-          function trainMatch(xact_chosen, cb2) {
+          function trainMatch(xact_chosen, cb3) {
 
             if ( argv.train && !(xact_chosen.metadata.source=="rawofx") ) {
               
               doTrain(argv.key, xact_chosen, function(err) {
-                cb2(err, xact_chosen)
+                cb3(err, xact_chosen)
               });
             } else {
-              cb2(null, xact_chosen)
+              cb3(null, xact_chosen)
             }
           }
-
+          
         ], function matchError(err, result) {
           if ( err ) cb(err);
-
-          // WRITE OUT ALL ADDS
-          _.each(adds,function(xact_add) {
-            xact2ledger(xact_add)
-          })
-
-          cb(null, result);
+          cb2(null, result);
         })
       }
+    }, function(err) {
+      if ( err ) cb(err)
+          
+      // WRITE OUT ALL ADDS
+      _.each(adds,function(xact_add) {
+        xact2ledger(xact_add)
+      });
+
+      cb(null)
+
     })
   }
 ], function(err, result) {
