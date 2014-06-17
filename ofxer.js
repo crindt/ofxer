@@ -4,8 +4,8 @@ var fs = require('fs');
 var ofx = require('ofx');
 var argv = require("minimist")(
   process.argv.slice(2),
-  { string: [ 'f', 'l', 'key' ],
-    boolean: [ 'train' ]
+  { string: [ 'f', 'l', 'key', 'o' ],
+    boolean: [ 'train', 'save' ]
   }
 );
 var moment = require('moment');
@@ -23,6 +23,7 @@ var doTrain = require(__dirname+'/funcs.js').doTrain;
 var getClassifier = require(__dirname+'/funcs.js').getClassifier;
 var exDist = require(__dirname+'/funcs.js').exDist;
 var dtf = "YYYY-MM-DD"
+var ynpatt = /^(y(es)?|no?)\s*$/i
 
 if ( ! argv.key ) {
   throw new Error("GOTTA SPECIFY THE FILE KEY")
@@ -181,34 +182,85 @@ function mindent(s, ind) {
   return _.map(s.split(/\n/),function(ss) { return ind+ss }).join("\n")
 }
 
-function xact2ledger(xact, status, indent) {
+function savexact(adds, file) {
+  if ( adds.length == 0 ) return  // nothing to do
+  if ( file === undefined ) throw new Error("Can't save to unspecified file")
+  var str = fs.createWriteStream(file, {flags:'a+'})
+  str.write("\n; ================================\n; Transactions added by ofxer "+moment().format()+"\n\n")
+  _.each(adds, function(xact_add) {
+    xact2ledger(xact_add, null, null, str)
+    str.write("\n")
+  })
+  str.write("\n; ================================\n; END adding transactions "+moment().format())
+  str.end("\n\n")
+}
+
+function xact2ledger(xact, status, indent, str) {
+  var stra = str
+  if ( stra === undefined ) {
+    //stra = fs.createWriteStream('/dev/stdout',{flags:'a'})
+  } else if ( typeof str == 'string' ) {
+    str = undefined
+    stra = fs.createWriteStream(stra,{flags:'a+'})
+  }
+
   if (!indent) indent = ""
   function emit(str) {
-    if ( status )
-      console.log(mindent(str[status],indent))
-    else
-      console.log(mindent(str,indent))
+    if ( stra === undefined ) {
+      if ( status )
+        console.log(mindent(str[status],indent))
+      else
+        console.log(mindent(str,indent))
+    } else {
+      if ( status )
+        stra.write(mindent(str[status],indent)+"\n")
+      else
+        stra.write(mindent(str,indent)+"\n")
+    }
   }
   function emitif(val) { if ( val !== undefined ) emit(val) }
   var ll = [moment(xact.date).format('YYYY-MM-DD')]
   if ( xact.num ) ll.push('('+xact.num+')')
+  else if ( xact.code ) ll.push('('+xact.code+')')
+  else if ( xact.fitid() ) ll.push('('+xact.fitid()+')')
   ll.push(xact.payee)
   emitif(ll.join(' '))
-  emitif(xact.memo?"    ; "+xact.memo:xact.memo)
-  if ( xact.metadata ) _.each(xact.metadata, function(v,k) { emit(mindent([k,v].join(': '),'    ; ')); });
   if ( xact.note ) emit(mindent(xact.note,"    ;"))
+  emitif(xact.memo?"    ; "+xact.memo:xact.memo)
+  if ( xact.metadata ) 
+    _.each(xact.metadata, function(v,k) { 
+      emit(mindent([k,v].join(': '),'    ; ')); 
+    });
+  // FIXME: bug: xml doesn't give posting metadata
+  _.each(xact.postings, function( p ) {
+    //var amt = -Math.round10(s.frac*tamt,-2)
+    if ( p.metadata ) _.each(p.metadata, function(v,k) { 
+      emit(mindent([k,v].join(': '),'    ; ')); 
+    });
+  });
+
                                                                   
   var tamt = 0;
   _.each(xact.postings, function( p ) {
     //var amt = -Math.round10(s.frac*tamt,-2)
     emit(sprintf("    %-60s    $%10.2f", p.account.name, -p.amt.val))
-    if ( p.metadata ) _.each(p.metadata, function(v,k) { emit(mindent([k,JSON.stringify(v)].join(': '),'    ; ')); });
+    if ( p.metadata ) _.each(p.metadata, function(v,k) { 
+      emit(mindent([k,v].join(': '),'    ; ')); 
+    });
     if ( p.note ) {
-      emit(mindent(p.note.join(""),"    ;"))
+      if ( typeof p.note == 'object' ) {
+        emit(mindent(p.note.join(""),"    ;"))
+      } else {
+        emit(mindent(p.note,"    ;"))
+      }
     }
 
     tamt += p.amt.val;
   });
+
+  if ( str === null ) { 
+    stra.end("")
+  }
 }
 
 function ledger2split(acct, xact, expect) {
@@ -234,7 +286,6 @@ function ledger2split(acct, xact, expect) {
 }
 
 var gacct = JSON.parse(fs.readFileSync("./accts.json"))
-console.log(JSON.stringify(gacct,null,'  '))
 
 
 function processOFX(cb) {
@@ -381,6 +432,12 @@ async.waterfall([
         if ( xact.fitid() ) {
           fitdb[xact.fitid()] = xact;
         }
+        _.each(xact.postings, function(p) {
+          if ( p.metadata.fitid ) {
+            console.log("GOT" +p.metadata.fitid)
+            fitdb[p.metadata.fitid] = xact
+          }
+        })
       });
 
       if ( argv.verbose ) console.log("UPDATED FITDB".info)
@@ -411,6 +468,7 @@ async.waterfall([
 
       if ( fitdb[xact_ofx.fitid()] ) {
         console.log([tkey,"already a transaction:",xact_ofx.fitid()].join(" ").info)
+        xact2ledger(fitdb[xact_ofx.fitid()])
         cb2(null,fitdb[xact_ofx.fitid()])
 
       } else {
@@ -418,6 +476,7 @@ async.waterfall([
         if ( argv.verbose ) console.log("FINDING MATCHES".info)
 
         async.waterfall([
+
           function matchExisting(cb3) {
             if ( argv.verbose ) console.log("...EXISTING?".info)
 
@@ -465,9 +524,11 @@ async.waterfall([
                 });
                 
                 xact_bayes.metadata.source = 'bayes'
-                console.log(JSON.stringify(xact_bayes))
-                console.log(JSON.stringify(xact_bayes.targetpost()))
-                console.log(JSON.stringify(xact_bayes.targetpost().metadata))
+                /*
+                  console.log(JSON.stringify(xact_bayes))
+                  console.log(JSON.stringify(xact_bayes.targetpost()))
+                  console.log(JSON.stringify(xact_bayes.targetpost().metadata))
+                */
                 var tp = xact_bayes.targetpost()
                 if ( !tp.metadata ) tp.metadata = {}
                 tp.metadata.fitid = xact_ofx.fitid()
@@ -530,7 +591,7 @@ async.waterfall([
             if ( result.split === 'x' ) {
               // cancel, unspecified
               
-              console.log(JSON.stringify(xact_ofx))
+              //console.log(JSON.stringify(xact_ofx))
               cb3(null, xact_ofx)
 
             } else if ( result.split === 's' ) {
@@ -595,6 +656,27 @@ async.waterfall([
       _.each(adds,function(xact_add) {
         xact2ledger(xact_add)
       });
+
+      var file = argv.o || argv.f
+      if ( !argv.save && adds.length > 0 ) {
+        prompt.get({
+          properties: {
+            'save': {
+              description: "Save "+adds.length+" transactions to ledger?",
+              pattern: ynpatt,
+              message: 'y(es)/n(o)',
+              required: true
+            }
+          }
+        }, function( err, result ) {
+          if ( result.save.match(/^y/i) ) {
+            // save it
+            savexact( adds, file )
+          }
+        })
+      } else {
+        savexact( adds, file )
+      }
 
       cb(null)
 

@@ -41,6 +41,7 @@ var Xact = function(data, acct) {
     var ps = []
 
     this.date = moment(data.date[0])
+    this.code = data.code
     this.payee = this.payee[0]
     if ( this.note ) 
       this.note = this.note.join("").replace(/^.*:\s/)  // remove metadata from note
@@ -138,7 +139,12 @@ var Xact = function(data, acct) {
   }
   this.fitid = function() {
     var md = this.targetpost().metadata
-    return (md && md.fitid?md.fitid:null)
+    return (md && md.fitid
+            ? md.fitid             // prefer target post
+            : ( this.metadata.fitid // otherwise full transaction
+                ? this.metadata.fitid
+                : this.code  // code is a proxy for fitid
+              ))
   }
     
 }
