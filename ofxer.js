@@ -391,19 +391,30 @@ function readSplits(xacta,accounts,cb) {
 
 }
 
-function getAccount(ofx, cb) {
-  var acctkey;
+function getacctkey(ofx) {
   var stmt = ofx2stmt(ofx).stmt
   var pfx  = ofx2stmt(ofx).pfx
+  var acctkey;
 
   if ( pfx==="BANK" ) {
     acctkey = [stmt[pfx+"ACCTFROM"].BANKID,stmt[pfx+"ACCTFROM"].ACCTID].join(":");
   } else if ( pfx==="CC" ) {
     acctkey = [stmt[pfx+"ACCTFROM"].ACCTID].join(":");
   } else {
-    cb(new Error("UNRECOGNIZED ACCT ID"))
+    throw new Error("UNRECOGNIZED ACCT ID")
+  }
+  return acctkey;
+}
+
+function getAccount(ofx, cb) {
+  var acctkey
+  try {
+    acctkey = getacctkey(ofx);
+  } catch (e) {
+    cb(e)
   }
   var acct = gacct[acctkey];
+  if ( acct == undefined ) cb("UNKNOWN ACCOUNT KEY "+acctkey)
   return acct
 }
 
@@ -412,7 +423,7 @@ async.waterfall([
   processOFX,
 
   function getAccountWrapper(ofx, cb) {
-    acct = getAccount(ofx);
+    acct = getAccount(ofx,cb);
     var err;
     if (acct == undefined) cb( "Unknown Account: "+acct )
     else 
@@ -524,11 +535,11 @@ async.waterfall([
                 });
                 
                 xact_bayes.metadata.source = 'bayes'
-                /*
+                if ( argv.verbose ) {
                   console.log(JSON.stringify(xact_bayes))
                   console.log(JSON.stringify(xact_bayes.targetpost()))
                   console.log(JSON.stringify(xact_bayes.targetpost().metadata))
-                */
+                }
                 var tp = xact_bayes.targetpost()
                 if ( !tp.metadata ) tp.metadata = {}
                 tp.metadata.fitid = xact_ofx.fitid()
@@ -611,6 +622,7 @@ async.waterfall([
               var splitno = parseInt(result.split)
               if ( (splitno) < exsplits.length ) {
                 // chose existing split
+                if ( argv.verbose ) console.log("CHOOSING EXISTING",splitno)
 
                 var xact_existing   = exsplits[splitno]
                 xact_existing.targetpost().metadata.fitid = xact_ofx.fitid()
@@ -624,6 +636,8 @@ async.waterfall([
           },
 
           function emitMatch(xact_chosen, cb3) {
+
+            if ( argv.verbose ) console.log ( "Emitting match" )
 
             // apply FITID
             xact2ledger(xact_chosen, 'selected', '   ')

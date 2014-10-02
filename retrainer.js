@@ -3,6 +3,7 @@ child;
 var async = require('async')
 var classifier = require('classifier')
 var _ = require("lodash-node");
+var getClassifier = require(__dirname+'/funcs.js').getClassifier;
 var argv = require("minimist")(
   process.argv.slice(2),
   { string: [ 'b', 'e', 'a' ] }
@@ -59,6 +60,7 @@ child.on("close",function(code) {
       if ( argv.verbose ) console.log("XACTXML:"+JSON.stringify(xactxml));
       var xact = new Xact(xactxml, argv.a);
       if ( argv.verbose ) console.log("XACT:"+JSON.stringify(xact));
+      if ( argv.verbose ) console.log("XACTKEY:"+xact.bkey());
 
       var no = cnt++;
       var tot = xact.total()
@@ -73,7 +75,7 @@ child.on("close",function(code) {
         })
 
       } else {
-        var bayes = getClassifier(argv.key, xact.bkey(), xact)
+        var bayes = getClassifier(argv.key, xact)
 
         bayes.classify(xact.tkey(), function(category) {
           console.log(xact.tkey()+" classified in: " + category);

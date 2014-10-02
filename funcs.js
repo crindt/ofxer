@@ -19,19 +19,55 @@ var amountMeta = function(tot) {
 
   else meta.push("AMOUNTMETALARGE")
   var totstr = ""+Math.abs(tot);
+  console.log("TOT IS",tot,Math.abs(tot),totstr)
+  console.log("TOT IS",tot,Math.abs(tot),totstr,"TOTAL_"+totstr)
   meta.push("TOTAL_"+totstr)
   //meta.push(["TOTAL",totstr.replace(/\./,"X").replace(/,/,"C")].join(""));
   return meta
 }
 
+function convertAmount(pamt) {
+  var amt = parseFloat(pamt.amount[0].quantity[0])
+  var sym = (pamt.amount[0].commodity ? pamt.amount[0].commodity.symbol : '$')
+  return { cmdty: sym, val: -amt }
+}
+
+var Posting = function(data) {
+  this.metadata = {}
+  this.amt = { cmdty: '$', val: 0 }
+  this.account  = { name: 'UNKNOWN' }
+  if ( data == undefined ) return;
+
+  if ( data && data.account && data.account.length == 1 ) { // xml
+
+    var p = data
+    var a = p.account[0];
+    this.account = { ref: a['$'].ref, name: a.name[0] };
+
+    // only record nonzero splits
+    var pamt = p['post-amount'][0]
+    var amt = convertAmount(pamt)
+    if ( p.note ) this.note = p.note.join("").replace(/^.*:\s/) // remove metdata from note
+
+    var pp = {}
+    if ( p.metadata ) {
+      _.each(p.metadata, function(m) {
+        _.each(m.value, function (mv) {
+          var k = mv['$'].key
+          var v = mv.string ? mv.string : mv.value
+          pp[k] = v;
+        });
+      });
+    }
+    this.metadata = pp
+    delete p['post-amount']
+    delete p.total
+    this.amt = amt;
+  }
+}
+
 
 var Xact = function(data, acct) {
-
-  function convertAmount(pamt) {
-    var amt = parseFloat(pamt.amount[0].quantity[0])
-    var sym = (pamt.amount[0].commodity ? pamt.amount[0].commodity.symbol : '$')
-    return { cmdty: sym, val: -amt }
-  }
 
   if ( data == undefined ) return;
 
@@ -48,38 +84,18 @@ var Xact = function(data, acct) {
 
     // get splits
     var tot = 0;
-    _.each(this.postings[0].posting, function( p ) {
-      var a = p.account[0];
-      p.account = { ref: a['$'].ref, name: a.name[0] };
+    _.each(this.postings[0].posting, function( pd ) {
+      var p = new Posting(pd)
 
-      
-      // only record nonzero splits
-      var pamt = p['post-amount'][0]
-      var amt = convertAmount(pamt)
-      if ( p.note ) p.note = p.note.join("").replace(/^.*:\s/) // remove metdata from note
-
-      var pp = {}
-      if ( p.metadata ) {
-        _.each(p.metadata, function(m) {
-          _.each(m.value, function (mv) {
-            var k = mv['$'].key
-            var v = mv.string ? mv.string : mv.value
-            pp[k] = v;
-          });
-        });
-      }
-      p.metadata = pp
-      delete p['post-amount']
-      delete p.total
-      p.amt = amt;
-      if ( amt.val != 0 ) {
+      if ( p.amt.val != 0 ) {
         ps.push(p)
-        tot += amt.val
+        tot += p.amt.val
       }
     });
-    ps.push( { account: { name: acct },
-               amt: { cmdty: '$' , val: -tot },
-               metadata: {} })
+    var pp = _.merge(new Posting(), { account: { name: acct },
+                                      amt: { cmdty: '$' , val: -tot },
+                                      metadata: {} })
+    ps.push( pp )
     this.postings = ps;
 
     // get metadata
@@ -93,10 +109,10 @@ var Xact = function(data, acct) {
       });
     }
     this.metadata = metadata
-  } else if ( data && data.DTPOSTED && data.NAME && data.FITID ) {
+  } else if ( data && data.DTPOSTED && (data.NAME || data.MEMO) && data.FITID ) {
     
     this.date = dp2date(data.DTPOSTED)
-    this.payee = data.NAME
+    this.payee = data.NAME || data.MEMO
     this.memo = data.MEMO
     if ( data.CHECKNUM ) this.num = parseInt(data.CHECKNUM)
     this.metadata = {}
@@ -114,7 +130,7 @@ var Xact = function(data, acct) {
     this.postings = ps;
     
   } else {
-    throw new Error("Unable to parse XACT data")
+    throw new Error("Unable to parse XACT data\n"+JSON.stringify(data,null,'  '))
   }
   //console.log(JSON.stringify(this,null,'  '))
 
@@ -128,7 +144,11 @@ var Xact = function(data, acct) {
     return [this.date.format("YYYY"), this.acct()].join(":") }
   this.tkey = function () {
     var adds = []
-    var tot = this.postings.slice(-1).pop().amt.val
+    // total is original target (in case of stripped transaction that has _original_target_total defined)
+    // OR the actual target
+    var tot = ("_original_target_total" in this ? 
+               this._original_target_total :
+               this.postings.slice(-1).pop().amt.val)
     adds.push( amountMeta(-tot) )
     var tkey = _.flatten([this.payee,adds]).join(" ")
     return tkey;
@@ -156,7 +176,7 @@ function dp2date(dtposted) {
 
 
 function stripXact( xact ) {
-  var xact_stripped = _.merge(new Xact(),xact)
+  var xact_stripped = _.merge(new Xact(),_.cloneDeep(xact))
 
   // now standardize
   var tot = xact_stripped.total()
@@ -164,6 +184,8 @@ function stripXact( xact ) {
     p.amt.val = p.amt.val/tot;
     _.each(['fitid','metadata','$'], function(k) { delete p[k] });
   });
+  // for reconstructing
+  xact_stripped._original_target_total = tot;
   
   // remove items we don't want to capture
   _.each(['payee','date','fitid','metadata','$'], function(k) { delete xact_stripped[k] });
