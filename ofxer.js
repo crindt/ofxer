@@ -1,3 +1,5 @@
+// -*- js-indent-level: 2 -*-
+
 var spawn = require('child_process').spawn,
 child;
 var fs = require('fs');
@@ -22,7 +24,7 @@ var stripXact = require(__dirname+'/funcs.js').stripXact;
 var doTrain = require(__dirname+'/funcs.js').doTrain;
 var getClassifier = require(__dirname+'/funcs.js').getClassifier;
 var exDist = require(__dirname+'/funcs.js').exDist;
-var dtf = "YYYY-MM-DD"
+var dtf = "YYYY/MM/DD"
 var ynpatt = /^(y(es)?|no?)\s*$/i
 
 if ( ! argv.key ) {
@@ -39,53 +41,70 @@ colors.setTheme({
 // Closure
 (function(){
 
-	/**
-	 * Decimal adjustment of a number.
-	 *
-	 * @param	{String}	type	The type of adjustment.
-	 * @param	{Number}	value	The number.
-	 * @param	{Integer}	exp		The exponent (the 10 logarithm of the adjustment base).
-	 * @returns	{Number}			The adjusted value.
-	 */
-	function decimalAdjust(type, value, exp) {
-		// If the exp is undefined or zero...
-		if (typeof exp === 'undefined' || +exp === 0) {
-			return Math[type](value);
-		}
-		value = +value;
-		exp = +exp;
-		// If the value is not a number or the exp is not an integer...
-		if (isNaN(value) || !(typeof exp === 'number' && exp % 1 === 0)) {
-			return NaN;
-		}
-		// Shift
-		value = value.toString().split('e');
-		value = Math[type](+(value[0] + 'e' + (value[1] ? (+value[1] - exp) : -exp)));
-		// Shift back
-		value = value.toString().split('e');
-		return +(value[0] + 'e' + (value[1] ? (+value[1] + exp) : exp));
-	}
+  /**
+   * Decimal adjustment of a number.
+   *
+   * @param	{String}	type	The type of adjustment.
+   * @param	{Number}	value	The number.
+   * @param	{Integer}	exp		The exponent (the 10 logarithm of the adjustment base).
+   * @returns	{Number}			The adjusted value.
+   */
+  function decimalAdjust(type, value, exp) {
+    // If the exp is undefined or zero...
+    if (typeof exp === 'undefined' || +exp === 0) {
+      return Math[type](value);
+    }
+    value = +value;
+    exp = +exp;
+    // If the value is not a number or the exp is not an integer...
+    if (isNaN(value) || !(typeof exp === 'number' && exp % 1 === 0)) {
+      return NaN;
+    }
+    // Shift
+    value = value.toString().split('e');
+    value = Math[type](+(value[0] + 'e' + (value[1] ? (+value[1] - exp) : -exp)));
+    // Shift back
+    value = value.toString().split('e');
+    return +(value[0] + 'e' + (value[1] ? (+value[1] + exp) : exp));
+  }
 
-	// Decimal round
-	if (!Math.round10) {
-		Math.round10 = function(value, exp) {
-			return decimalAdjust('round', value, exp);
-		};
-	}
-	// Decimal floor
-	if (!Math.floor10) {
-		Math.floor10 = function(value, exp) {
-			return decimalAdjust('floor', value, exp);
-		};
-	}
-	// Decimal ceil
-	if (!Math.ceil10) {
-		Math.ceil10 = function(value, exp) {
-			return decimalAdjust('ceil', value, exp);
-		};
-	}
+  // Decimal round
+  if (!Math.round10) {
+    Math.round10 = function(value, exp) {
+      return decimalAdjust('round', value, exp);
+    };
+  }
+  // Decimal floor
+  if (!Math.floor10) {
+    Math.floor10 = function(value, exp) {
+      return decimalAdjust('floor', value, exp);
+    };
+  }
+  // Decimal ceil
+  if (!Math.ceil10) {
+    Math.ceil10 = function(value, exp) {
+      return decimalAdjust('ceil', value, exp);
+    };
+  }
 
 })();
+
+function promptForMemo(xact,cb) {
+  prompt.get({properties: {
+    "transnote": {
+      description: "Note for transaction",
+      'default': ""
+    }
+  }}, function(err, res) {
+    if ( err ) cb(err)
+    if ( res.transnote && !res.transnote.match(/^\s*$/) ) {
+      // add any memo specified
+      xact.memo = _.filter([xact.memo,res.transnote],
+                           function(m) { return m }).join("\n")
+    }
+    cb(null,xact)
+  })
+}
 
 
 var fitdb = {}
@@ -178,7 +197,7 @@ function ofx2ledger(dt, name, notes, acct, tamt, split, trial) {
 }
 
 function mindent(s, ind) {
-//  console.log("indenting ",s,"by","'"+ind+"'")
+  //  console.log("indenting ",s,"by","'"+ind+"'")
   return _.map(s.split(/\n/),function(ss) { return ind+ss }).join("\n")
 }
 
@@ -191,7 +210,7 @@ function savexact(adds, file) {
     xact2ledger(xact_add, null, null, str)
     str.write("\n")
   })
-  str.write("\n; ================================\n; END adding transactions "+moment().format())
+    str.write("\n; ================================\n; END adding transactions "+moment().format())
   str.end("\n\n")
 }
 
@@ -219,7 +238,7 @@ function xact2ledger(xact, status, indent, str) {
     }
   }
   function emitif(val) { if ( val !== undefined ) emit(val) }
-  var ll = [moment(xact.date).format('YYYY-MM-DD')]
+  var ll = [moment(xact.date).format(dtf)]
   if ( xact.num ) ll.push('('+xact.num+')')
   else if ( xact.code ) ll.push('('+xact.code+')')
   else if ( xact.fitid() ) ll.push('('+xact.fitid()+')')
@@ -239,11 +258,13 @@ function xact2ledger(xact, status, indent, str) {
     });
   });
 
-                                                                  
+  
   var tamt = 0;
   _.each(xact.postings, function( p ) {
     //var amt = -Math.round10(s.frac*tamt,-2)
     emit(sprintf("    %-60s    $%10.2f", p.account.name, -p.amt.val))
+    if ( p.note ) emit(mindent(p.note,"    ;"))
+    emitif(p.memo?"    ; "+p.memo:p.memo)
     if ( p.metadata ) _.each(p.metadata, function(v,k) { 
       emit(mindent([k,v].join(': '),'    ; ')); 
     });
@@ -285,15 +306,14 @@ function ledger2split(acct, xact, expect) {
   return val;
 }
 
-var gacct = JSON.parse(fs.readFileSync("./accts.json"))
-
+var gacct = JSON.parse(fs.readFileSync("./accts.json").toString())
 
 function processOFX(cb) {
 
   fs.readFile(argv.f, 'utf8', function(err, ofxData) {
     if ( err ) cb(err)
 
-    var data = ofx.parse(ofxData);
+    var data = ofx.parse(ofxData.toString());
 
     if ( argv.verbose ) console.log(data);
 
@@ -302,38 +322,80 @@ function processOFX(cb) {
 }
 
 function ofx2stmt(ofx) {
-  var stmt, pfx
+  var stmt, pfx, pfx2, name
+  var res = {}
+
   if ( ofx.OFX.BANKMSGSRSV1 ) {
-    stmt = ofx.OFX.BANKMSGSRSV1.STMTTRNRS.STMTRS
-    pfx  = "BANK";
-  } else if ( ofx.OFX.CREDITCARDMSGSRSV1 ) { 
-    stmt = ofx.OFX.CREDITCARDMSGSRSV1.CCSTMTTRNRS.CCSTMTRS
-    pfx  = "CC";
-  } else {
-    console.log("UNRECOGNIZED OFX TYPE")
-    process.exit(1);
+    // bank statement
+    pfx = "BANK"
+    pfx2 = ""
+    name = "BANK"
+  } else if ( ofx.OFX.CREDITCARDMSGSRSV1 ) {
+    // cc statement
+    pfx = "CC"
+    pfx2 = "CC"
+    name = "CREDITCARD"
   }
-  
-  if ( stmt === undefined ) {
-    throw new Error("NO STMT DATA?");
-  }
-  return {stmt:stmt,pfx:pfx}
+
+  var stmts = _.flatten([ofx.OFX[name+"MSGSRSV1"][pfx2+"STMTTRNRS"]])
+  var keys = _.reduce( stmts, function(thekeys, stmta) {
+    var stmt = stmta[pfx2+"STMTRS"]
+    thekeys[_.filter([stmt[pfx+"ACCTFROM"].BANKID,
+                      stmt[pfx+"ACCTFROM"].ACCTID], function(v) {
+                        return v
+                      }).join(":")] = 1
+    return thekeys
+  }, {})
+  keys = _.keys(keys);
+  if ( keys.length > 1 ) throw new Error("More than one account in ofx",JSON.stringify(keys,null,'  '))
+  res.pfx = pfx
+  res.acctkey = keys[0]
+  res.trans = _.reduce(stmts, function(transarr,stmta) {
+    var stmt = stmta[pfx2+"STMTRS"]
+    var trans = stmt.BANKTRANLIST
+    transarr.push(trans.STMTTRN)
+    return transarr;
+  },[])
+  return res
 }
 
 function readSplits(xacta,accounts,cb) {
   var xact = _.cloneDeep(xacta)
-
+  
+  var memo;
   var newsplit = []
   var left = xact.amount()
+  /*
+    async.waterfall(
+    function readTransactionNote(cbrtn) {
+    prompt.get({properties: {
+    "transnote": {
+    description: "Note for transaction"
+    }
+    }}, function(err, resnote) {
+    memo = resnote
+    })
+    cbrtn()
+    },
+  */
+  
   async.whilst(
+    // loop whilst the remaining split amount is not ~zero
     function() { return Math.abs(left) > 0.009 },
-    function(cbg) {
+    
+    // each loop, read a split
+    function readTransactionSplit(cbSplitDone) {
+      
+      // we loop on a whilst to allow the user to abort entering a split
       async.whilst(
         function () { return true },
-        function (cbw) {
+        function transactionPrompt(cbPromptAgain) {
+          // prompt for account, amount, and note (optional)
           prompt.get({properties: {
             "account": {
               description: "Account for ["+left+"]",
+              pattern: /[^\s]+/,  // at least one non-space character
+              required: true,
               
               completer: function(line) {
                 var completions = accounts
@@ -347,63 +409,83 @@ function readSplits(xacta,accounts,cb) {
               description: "    Amount",
               pattern: /^-?(\d?\d?\d(,\d\d\d)*|\d+)(\.\d\d)?$/,
               'default': (sprintf("%0.2f",left))
+            },
+            "memo": {
+              description: "      memo",
+              'default': ''
             }
-          }}, function(err, res3) {
-            if ( err ) cbg(err);
+
+          }}, function processTransactionPrompt(err, res3) {
+            if ( err ) cbPromptAgain(err);  // split entry done with error
+            
+            // see if specified account is in list, if not, confirm we want to use it
+            var amt = parseFloat(res3.amount)
+            ns = {account: { name:res3.account },
+                  amt: { cmdty: '$', val: -amt }}
+            if ( res3.memo && !res3.memo.match(/^\s*$/) ) ns.memo = res3.memo
             if ( !_.find( accounts, function( a ) {return a == res3.account }) ) {
+              // account not in known list, prompt to confirm new account
               prompt.get({properties: {
                 "newac": {
                   description: "Use new account "+res3.account+"?",
                   pattern: /^(y(es)?|no?)\s*$/i,
                   required: true
                 }
-              }}, function(err, res4) {
+              }}, function processNewAccountPrompt(err, res4) {
                 if ( res4.newac.match(/^y/i) ) {
-                  var amt = parseFloat(res3.amount)
-                  newsplit.push({account: { name:res3.account },
-                                 amt: { cmdty: '$', val: -amt }})
-                  left -= amt
-                  // add new account to accounts
+                  // add new account to accounts list
                   accounts.push(res3.account);
-                  cbg();
+                  
+                  // add split
+                  newsplit.push(ns)
+                  
+                  // update remainder
+                  left -= amt
+                  cbSplitDone()
+
                 } else {
-                  cbw()
+                  // NO, don't want to create a new account, just continue without
+                  // adding split
+                  console.log("OK, discarding this split.  Try again...".warning)
+                  cbPromptAgain()
                 }
               })
+              
             } else {
-              var amt = parseFloat(res3.amount)
-              newsplit.push({account: { name:res3.account },
-                             amt: { cmdty: '$', val: -amt }})
+              // account already exists, so just add the split and continue
+
+              // add split
+              newsplit.push(ns)
+              
+              // update remainder
               left -= amt
-              cbg();
+              cbSplitDone();
             }
           })
-        }
-      )
+        }, function transactionPromptDone(err) {
+        })
     },
-    function whilstError(err) {
+    
+    function readSplitsWhilstDone(err) {
       newsplit.push(xact.postings.slice(-1)[0])  // add original
+      if ( memo ) xact.memo = xact.memo+memo
       xact.postings = newsplit;
       xact.metadata.source = "manual"
       
       cb(err, xact)
-    });
-
+    })
 }
+/*
+  }, function waterfallErr(err) {
+  if ( err ) throw err
+  cbg()
+  })
+  });
+})
+*/
 
 function getacctkey(ofx) {
-  var stmt = ofx2stmt(ofx).stmt
-  var pfx  = ofx2stmt(ofx).pfx
-  var acctkey;
-
-  if ( pfx==="BANK" ) {
-    acctkey = [stmt[pfx+"ACCTFROM"].BANKID,stmt[pfx+"ACCTFROM"].ACCTID].join(":");
-  } else if ( pfx==="CC" ) {
-    acctkey = [stmt[pfx+"ACCTFROM"].ACCTID].join(":");
-  } else {
-    throw new Error("UNRECOGNIZED ACCT ID")
-  }
-  return acctkey;
+  return ofx2stmt(ofx).acctkey
 }
 
 function getAccount(ofx, cb) {
@@ -421,7 +503,7 @@ function getAccount(ofx, cb) {
 // Here's the main logic
 async.waterfall([
   processOFX,
-
+  
   function getAccountWrapper(ofx, cb) {
     acct = getAccount(ofx,cb);
     var err;
@@ -445,7 +527,7 @@ async.waterfall([
         }
         _.each(xact.postings, function(p) {
           if ( p.metadata.fitid ) {
-            console.log("GOT" +p.metadata.fitid)
+            console.log("GOT FIT" +p.metadata.fitid)
             fitdb[p.metadata.fitid] = xact
           }
         })
@@ -460,241 +542,278 @@ async.waterfall([
     })
   },
 
-  function findLedgerMatches(ofx, acct, ledger, cb) {
-    var stmt = ofx2stmt(ofx).stmt
-    var pfx  = ofx2stmt(ofx).pfx
-
+  function findLedgerMatches(ofx, acct, ledger, cbFindLedgerMatchesDone) {
     var adds = []
+    var stmts = _.flatten([ofx2stmt(ofx)])
+    async.eachSeries(stmts, function stmtSeries(stmta, cbStatementDone) {
+      // get the transactions, filter any that are undefined
+      var trans = _.filter(_.flatten([stmta.trans]),
+                           function(t) { 
+                             return t !== undefined
+                           }
+                          )
+      // convert to array if it isn't one already
+      async.eachSeries(_.flatten([trans]).reverse(), function tranSeries( ofxxact, cbTransactionDone ) {
+	var xact_ofx = new Xact(ofxxact, acct.acct)
+        if ( xact_ofx.postings && xact_ofx.postings[0] ) {
+	  xact_ofx.postings[0].account = {name: 'unspecified'}
+        } else {
+          console.log("NO POSTINGS...IGNORING?\n")
+          console.log(JSON.stringify(ofxxact,null,'  '))
+          console.log(JSON.stringify(xact_ofx,null, '  '))
+          cbTransactionDone(null)
+        }
+	xact_ofx.metadata.source = 'rawofx'
+	console.log("\n===============================================\nOFX TRANSACTION...".red)
+	xact2ledger(xact_ofx, 'trial', '   ')
+	console.log("===============================================".red)
 
-    async.eachSeries(stmt["BANKTRANLIST"].STMTTRN.reverse(), function( ofxxact, cb2 ) {
-      var xact_ofx = new Xact(ofxxact, acct.acct)
-      xact_ofx.postings[0].account = {name: 'unspecified'}
-      xact_ofx.metadata.source = 'rawofx'
-      console.log("\n===============================================\nOFX TRANSACTION...".red)
-      xact2ledger(xact_ofx, 'trial', '   ')
-      console.log("===============================================".red)
 
+	var tkey = xact_ofx.tkey()
 
-      var tkey = xact_ofx.tkey()
+	if ( fitdb[xact_ofx.fitid()] ) {
+          console.log([tkey,"already a transaction:",xact_ofx.fitid()].join(" ").info)
+          xact2ledger(fitdb[xact_ofx.fitid()])
+          cbTransactionDone(null,fitdb[xact_ofx.fitid()])
 
-      if ( fitdb[xact_ofx.fitid()] ) {
-        console.log([tkey,"already a transaction:",xact_ofx.fitid()].join(" ").info)
-        xact2ledger(fitdb[xact_ofx.fitid()])
-        cb2(null,fitdb[xact_ofx.fitid()])
+	} else {
+          if ( argv.verbose ) console.log("FINDING MATCHES".info)
+          
+          async.waterfall([
+            
+            function matchExisting(cbMatchExistingDone) {
+              if ( argv.verbose ) console.log("...EXISTING?".info)
+              
+              // see if matching transaction exists within one week on either side
+              var amt = parseFloat(xact_ofx.amount())
+              var b = xact_ofx.date.clone()
+              b.subtract('days',7)
+              var e = xact_ofx.date.clone()
+              e.add('days',7)
+              var window = Math.abs(amt)*0.25  // 5%
+              // FIXME: maybe avoid the multiple ledger calls here!  Likely very slow with large files
+              processLedger(argv.l, acct.acct, "(amount>"+((-amt)-window)+") and (amount<"+((-amt)+window)+")", 
+                            ['-b', b.format(dtf), '-e', e.format(dtf)], function(l2) {
 
-      } else {
-
-        if ( argv.verbose ) console.log("FINDING MATCHES".info)
-
-        async.waterfall([
-
-          function matchExisting(cb3) {
-            if ( argv.verbose ) console.log("...EXISTING?".info)
-
-            // see if matching transaction exists within one week on either side
-            var amt = parseFloat(xact_ofx.amount())
-            var b = xact_ofx.date.clone()
-            b.subtract('days',7)
-            var e = xact_ofx.date.clone()
-            e.add('days',7)
-            var window = Math.abs(amt)*0.25  // 5%
-            processLedger(argv.l, acct.acct, "(amount>"+((-amt)-window)+") and (amount<"+((-amt)+window)+")", ['-b', b.format(dtf), '-e', e.format(dtf)], function(l2) {
-
-              var existingsplits = []
-              var lxacts = l2.transactions[0].transaction;
-              if (argv.verbose) console.log("LXACTS:"+JSON.stringify(lxacts))
-              _.each(lxacts,function(lxact) {  // loop over matching ledger xacts
-                var xact_led = new Xact(lxact, acct.acct)
-                existingsplits.push(xact_led)
-              });
-              existingsplits = existingsplits.sort(function(a,b) {
-                return exDist(a,xact_ofx) - exDist(b,xact_ofx)
+		var existingsplits = []
+		var lxacts = l2.transactions[0].transaction;
+		if (argv.verbose) console.log("LXACTS:"+JSON.stringify(lxacts))
+		_.each(lxacts,function(lxact) {  // loop over matching ledger xacts
+                  var xact_led = new Xact(lxact, acct.acct)
+                  existingsplits.push(xact_led)
+		});
+		existingsplits = existingsplits.sort(function(a,b) {
+                  return exDist(a,xact_ofx) - exDist(b,xact_ofx)
+		})
+		cbMatchExistingDone(null, existingsplits);
               })
-              cb3(null, existingsplits);
-            })
-          },
+            },
 
-          function bayesianMatch(exsplits, cb3) {
-            if ( argv.verbose ) console.log("...BAYESIAN?".info)
+            function bayesianMatch(exsplits, cbBayesianMatchDone) {
+              if ( argv.verbose ) console.log("...BAYESIAN?".info)
 
-            var bayes = getClassifier(argv.key, xact_ofx)
+              var bayes = getClassifier(argv.key, xact_ofx)
 
-            bayes.classify(tkey, function(category) {
-              if ( category === 'unclassified' ) {
-                cb3(null, exsplits, null)
+              bayes.classify(tkey, function(category) {
+		if ( category === 'unclassified' ) {
+                  cbBayesianMatchDone(null, exsplits, null)
+
+		} else {
+                  var xact_bayes = _.merge(new Xact(),xact_ofx);
+                  var guess = _.pick(JSON.parse(category), function(v,k) { return k.match(/^(postings)/)})
+                  _.merge(xact_bayes, guess)
+                  xact_bayes.date = moment(xact_bayes.date)
+                  // expand fractions to amounts from the OFX
+                  var tot = xact_ofx.total()
+                  _.each(xact_bayes.postings, function(p) {
+                    p.amt.val = p.amt.val * tot
+                  });
+                  
+                  xact_bayes.metadata.source = 'bayes'
+                  if ( argv.verbose ) {
+                    console.log(JSON.stringify(xact_bayes))
+                    console.log(JSON.stringify(xact_bayes.targetpost()))
+                    console.log(JSON.stringify(xact_bayes.targetpost().metadata))
+                  }
+                  var tp = xact_bayes.targetpost()
+                  if ( !tp.metadata ) tp.metadata = {}
+                  tp.metadata.fitid = xact_ofx.fitid()
+                  cbBayesianMatchDone(null, exsplits, xact_bayes)
+		}
+              })
+            },
+
+            function showOptions(exsplits, xact_bayes, cbShowOptionsDone) {
+
+              var cnt = 0;
+              var choices = ["x","s"]
+              var defaults = []
+
+              _.each(exsplits, function(xact) {
+		defaults.push(cnt)
+		console.log(('   '+"\n"+cnt+") EXISTING TRANSACTION ["+exDist(xact,xact_ofx)+"]").info)
+		xact2ledger(xact, 'trial', '   ')
+		cnt++
+              });
+              if ( exsplits.length > 0 ) {
+		choices.push('\\d+')
+              }
+
+              if ( xact_bayes ) {
+		console.log('   '+"\nb) BEST BAYESIAN GUESS:".info)
+		//ofx2ledger(dp2date(xact.DTPOSTED), xact.NAME, [xact.MEMO, "FITID: "+xact.fitid], parseFloat(xact.TRNAMT), true)
+		xact2ledger(xact_bayes, 'trial', '   ')
+		choices.push("b")
+		defaults.push("b")
+              }
+              
+              console.log('   '+"\ns) MANUALLY SPECIFY SPLITS".info)
+              defaults.push("s")
+              
+              console.log('   '+"\nx) USE RAW OFX".info)
+              defaults.push("x")
+
+              patt = new RegExp("("+choices.join("|")+")","i")
+              var dflt = defaults[0]
+
+              prompt.start()
+              prompt.get({
+		properties: {
+                  'split': {
+                    description: "Choose which split to apply",
+                    pattern: patt,
+                    message: 'Choose a <number> or x',
+                    'default': dflt,
+                    required: true
+                  }
+		}
+              }, function (err, result) {
+		console.log("GOT ",result.split)
+		cbShowOptionsDone(err, exsplits, xact_bayes, result)
+              })
+            },
+
+            function processChoice(exsplits, xact_bayes, result, cbProcessChoiceDone) {
+              var choice
+              if ( result.split === 'x' ) {
+		// cancel, unspecified
+
+                promptForMemo(xact_ofx,cbProcessChoiceDone)
+
+              } else if ( result.split === 's' ) {
+		console.log("Specify Splits...")
+		// FIXME
+		readSplits(xact_ofx, ledger.accounts, function(err, xact_new) {
+                  if ( err ) cbProcessChoiceDone(err)
+                  adds.push(xact_new)
+                  promptForMemo(xact_new, cbProcessChoiceDone)
+		});
+
+              } else if ( result.split === 'b' ) {
+
+		adds.push(xact_bayes)
+                promptForMemo(xact_bayes, cbProcessChoiceDone)
 
               } else {
-                var xact_bayes = _.merge(new Xact(),xact_ofx);
-                var guess = _.pick(JSON.parse(category), function(v,k) { return k.match(/^(postings)/)})
-                _.merge(xact_bayes, guess)
-                xact_bayes.date = moment(xact_bayes.date)
-                // expand fractions to amounts from the OFX
-                var tot = xact_ofx.total()
-                _.each(xact_bayes.postings, function(p) {
-                  p.amt.val = p.amt.val * tot
-                });
-                
-                xact_bayes.metadata.source = 'bayes'
-                if ( argv.verbose ) {
-                  console.log(JSON.stringify(xact_bayes))
-                  console.log(JSON.stringify(xact_bayes.targetpost()))
-                  console.log(JSON.stringify(xact_bayes.targetpost().metadata))
-                }
-                var tp = xact_bayes.targetpost()
-                if ( !tp.metadata ) tp.metadata = {}
-                tp.metadata.fitid = xact_ofx.fitid()
-                cb3(null, exsplits, xact_bayes)
+		var splitno = parseInt(result.split)
+		if ( (splitno) < exsplits.length ) {
+                  // chose existing split
+                  if ( argv.verbose ) console.log("CHOOSING EXISTING",splitno)
+
+                  var xact_existing   = exsplits[splitno]
+                  xact_existing.targetpost().metadata.fitid = xact_ofx.fitid()
+
+                  promptForMemo(xact_existing, cbProcessChoiceDone)
+                  
+		} else {
+
+                  cbProcessChoiceDone("SHOULDN'T GET HERE!")
+		}
               }
-            })
-          },
+            },
 
-          function showOptions(exsplits, xact_bayes, cb3) {
+            function emitMatch(xact_chosen, cbEmitMatchDone) {
 
-            var cnt = 0;
-            var choices = ["x","s"]
-            var defaults = []
+              if ( argv.verbose ) console.log ( "Emitting match" )
 
-            _.each(exsplits, function(xact) {
-              defaults.push(cnt)
-              console.log(('   '+"\n"+cnt+") EXISTING TRANSACTION ["+exDist(xact,xact_ofx)+"]").info)
-              xact2ledger(xact, 'trial', '   ')
-              cnt++
-            });
-            if ( exsplits.length > 0 ) {
-              choices.push('\\d+')
-            }
+              // apply FITID
+              xact2ledger(xact_chosen, 'selected', '   ')
 
-            if ( xact_bayes ) {
-              console.log('   '+"\nb) BEST BAYESIAN GUESS:".info)
-              //ofx2ledger(dp2date(xact.DTPOSTED), xact.NAME, [xact.MEMO, "FITID: "+xact.fitid], parseFloat(xact.TRNAMT), true)
-              xact2ledger(xact_bayes, 'trial', '   ')
-              choices.push("b")
-              defaults.push("b")
-            }
-            
-            console.log('   '+"\ns) MANUALLY SPECIFY SPLITS".info)
-            defaults.push("s")
-            
-            console.log('   '+"\nx) USE RAW OFX".info)
-            defaults.push("x")
+              cbEmitMatchDone(null, xact_chosen)
 
-            patt = new RegExp("("+choices.join("|")+")","i")
-            var dflt = defaults[0]
+            },
 
-            prompt.start()
-            prompt.get({
-              properties: {
-                'split': {
-                  description: "Choose which split to apply",
-                  pattern: patt,
-                  message: 'Choose a <number> or x',
-                  'default': dflt,
-                  required: true
-                }
-              }
-            }, function (err, result) {
-              console.log("GOT ",result.split)
-              cb3(err, exsplits, xact_bayes, result)
-            })
-          },
+            function trainMatch(xact_chosen, cbTrainMatchDone) {
 
-          function chooseMatch(exsplits, xact_bayes, result, cb3) {
-            if ( result.split === 'x' ) {
-              // cancel, unspecified
-              
-              //console.log(JSON.stringify(xact_ofx))
-              cb3(null, xact_ofx)
-
-            } else if ( result.split === 's' ) {
-              console.log("Specify Splits...")
-              // FIXME
-              readSplits(xact_ofx, ledger.accounts, function(err, xact_new) {
-                adds.push(xact_new)
-                cb3(err, xact_new)
-              });
-
-            } else if ( result.split === 'b' ) {
-
-              adds.push(xact_bayes)
-              cb3(null, xact_bayes)
-
-            } else {
-              var splitno = parseInt(result.split)
-              if ( (splitno) < exsplits.length ) {
-                // chose existing split
-                if ( argv.verbose ) console.log("CHOOSING EXISTING",splitno)
-
-                var xact_existing   = exsplits[splitno]
-                xact_existing.targetpost().metadata.fitid = xact_ofx.fitid()
-
-                cb3(null, xact_existing)
-                
+              if ( argv.train && !(xact_chosen.metadata.source=="rawofx") ) {
+		
+		doTrain(argv.key, xact_chosen, function(err) {
+                  if ( err ) {
+                    // hmm. train failed, but let's not die here...
+                    console.log("TRAIN FAILED: "+err)
+                    console.log("IGNORING AND CONTINUING")
+                    err = null;
+                  }
+                  cbTrainMatchDone(err, xact_chosen)
+		});
               } else {
-                cb3("SHOULDN'T GET HERE!")
+		cbTrainMatchDone(null, xact_chosen)
               }
             }
-          },
+            
+          ], function waterfallMatchDone(err, result) {
+            if ( err ) cbTransactionDone(err);
+            cbTransactionDone(null, result);
+          })
+	}
+      }, function(err) {
+	if ( err ) cbStatementDone(err)
+      
+	console.log("MOVING ON TO NEXT STATEMENT")
+        cbStatementDone()
 
-          function emitMatch(xact_chosen, cb3) {
-
-            if ( argv.verbose ) console.log ( "Emitting match" )
-
-            // apply FITID
-            xact2ledger(xact_chosen, 'selected', '   ')
-
-            cb3(null, xact_chosen)
-
-          },
-
-          function trainMatch(xact_chosen, cb3) {
-
-            if ( argv.train && !(xact_chosen.metadata.source=="rawofx") ) {
-              
-              doTrain(argv.key, xact_chosen, function(err) {
-                cb3(err, xact_chosen)
-              });
-            } else {
-              cb3(null, xact_chosen)
-            }
-          }
-          
-        ], function matchError(err, result) {
-          if ( err ) cb(err);
-          cb2(null, result);
-        })
-      }
+      });
     }, function(err) {
-      if ( err ) cb(err)
-          
+      if ( err ) cbFindLedgerMatchesDone(err)
       // WRITE OUT ALL ADDS
       _.each(adds,function(xact_add) {
         xact2ledger(xact_add)
       });
-
+      
       var file = argv.o || argv.f
-      if ( !argv.save && adds.length > 0 ) {
-        prompt.get({
-          properties: {
-            'save': {
-              description: "Save "+adds.length+" transactions to ledger?",
-              pattern: ynpatt,
-              message: 'y(es)/n(o)',
-              required: true
-            }
-          }
-        }, function( err, result ) {
-          if ( result.save.match(/^y/i) ) {
-            // save it
-            savexact( adds, file )
-          }
-        })
+      if ( adds.length==0 ) { 
+        // nothing to do
+        cbFindLedgerMatchesDone(null)
+
       } else {
-        savexact( adds, file )
+        if ( !argv.save ) {
+          // prompt to confirm we want to save
+          prompt.get({
+            properties: {
+              'save': {
+	        description: "Save "+adds.length+" transactions to ledger?",
+	        pattern: ynpatt,
+	        message: 'y(es)/n(o)',
+	        required: true
+              }
+            }
+          }, function( err, result ) {
+	    if ( err ) cbFindLedgerMatchesDone(err)  // error in prompt
+            
+            if ( result.save.match(/^y/i) ) {
+              // save it
+              savexact( adds, file )
+            }
+	    cbFindLedgerMatchesDone(null)
+            
+          })
+        } else {
+          
+          savexact( adds, file )
+	  cbFindLedgerMatchesDone(null)
+        }
       }
-
-      cb(null)
-
-    })
+    });
   }
 ], function(err, result) {
   if ( err ) throw err

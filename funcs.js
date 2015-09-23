@@ -153,7 +153,9 @@ var Xact = function(data, acct) {
     var tkey = _.flatten([this.payee,adds]).join(" ")
     return tkey;
   }
-  this.targetpost = function() { return this.postings.slice(-1).pop() }
+  this.targetpost = function() { 
+      return this.postings.slice(-1).pop() 
+  }
   this.total = function() {
     return this.targetpost().amt.val
   }
@@ -188,7 +190,8 @@ function stripXact( xact ) {
   xact_stripped._original_target_total = tot;
   
   // remove items we don't want to capture
-  _.each(['payee','date','fitid','metadata','$'], function(k) { delete xact_stripped[k] });
+  _.each(['payee','date','fitid','metadata','$','code',"num"], 
+         function(k) { delete xact_stripped[k] });
   return xact_stripped
 }
 
