@@ -3,7 +3,7 @@ child;
 var async = require('async')
 var classifier = require('classifier')
 var _ = require("lodash-node");
-var getClassifier = require(__dirname+'/funcs.js').getClassifier;
+var getTransactionClassifier = require(__dirname+'/funcs.js').getTransactionClassifier;
 var argv = require("minimist")(
   process.argv.slice(2),
   { string: [ 'b', 'e', 'a' ] }
@@ -13,6 +13,7 @@ var amountMeta = require(__dirname+'/funcs.js').amountMeta;
 var Xact = require(__dirname+'/funcs.js').Xact;
 var stripXact = require(__dirname+'/funcs.js').stripXact;
 var doTrain = require(__dirname+'/funcs.js').doTrain;
+var saveAllClassifiers = require(__dirname+'/funcs.js').saveAllClassifiers;
 
 var args = ["-f", argv.f, "xml", "reg", argv.a, "-r"];
 if ( argv.b ) { args.push("-b");args.push(argv.b) }
@@ -55,7 +56,7 @@ child.on("close",function(code) {
     var transactions = ledger.transactions[0].transaction
     console.log((transactions?transactions.length:0)+" transactions");
     var cnt = 0;
-    async.eachLimit(transactions, 30, function(xactxml, cb) {
+    _.each(transactions, function(xactxml) {
 
       if ( argv.verbose ) console.log("XACTXML:"+JSON.stringify(xactxml));
       var xact = new Xact(xactxml, argv.a);
@@ -70,28 +71,18 @@ child.on("close",function(code) {
       if ( argv.train ) {
         //var val = postings.length > 1 ? "SPLIT" : postings[0].account[0].name
 
-        doTrain(argv.key, xact, function(err) {
-          cb( err, xact )
-        })
+        doTrain(argv.key, xact)
 
       } else {
-        var bayes = getClassifier(argv.key, xact)
+        var bayes = getTransactionClassifier(argv.key, xact)
 
-        bayes.classify(xact.tkey(), function(category) {
-          console.log(xact.tkey()+" classified in: " + category);
-          cb()
-        });        
+        category = bayes.classify(xact.tkey())
+        console.log(xact.tkey()+" classified in: " + category);
       }
+    });
 
-    }, function( err ) {
-
-      if ( err ) { 
-        console.log("Error processing");
-        process.exit(1);
-      }
-    })
+    saveAllClassifiers()
   });
-  
 })
 /*
 bayes.train("cheap replica watches", 'spam', function() {

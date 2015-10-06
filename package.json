@@ -5,16 +5,17 @@
   "main": "ofxer.js",
   "dependencies": {
     "async": "^0.9.0",
-    "lodash-node": "^2.4.1",
-    "colors": "^0.6.2",
     "classifier": "^0.1.0",
+    "colors": "^0.6.2",
+    "levenshtein": "^1.0.5",
+    "lodash-node": "^2.4.1",
     "minimist": "^0.1.0",
-    "prompt": "crindt/prompt",
     "moment": "=2.6.0",
-    "sprintf-js": "^0.0.7",
+    "natural": "^0.2.1",
     "ofx": "^0.2.0",
-    "xml2js": "^0.4.4",
-    "levenshtein": "^1.0.5"
+    "prompt": "crindt/prompt",
+    "sprintf-js": "^0.0.7",
+    "xml2js": "^0.4.4"
   },
   "devDependencies": {},
   "scripts": {
