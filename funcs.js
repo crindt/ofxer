@@ -1,8 +1,8 @@
 var _ = require("lodash-node");
 var moment = require('moment');
 var async = require('async')
-var classifier = require('classifier');
-var Levenshtein = require('levenshtein')
+var natural = require('natural')
+var fs = require('fs')
 
 var amountMeta = function(tot) {
   var meta = []
@@ -198,6 +198,7 @@ function stripXact( xact ) {
 
 var classifiers = {}
 
+/*
 function getClassifier(key,xact) {
   if ( !key ) throw new Error("MUST SPECIFY KEY!")
   var ybkey = [key,xact.bkey()].join(":")
@@ -219,8 +220,51 @@ function getClassifier(key,xact) {
   }
   return classifiers[ybkey]
 }
+*/
 
-function doTrain(key,xact,cb) {
+function getTransactionClassifierKey(key,xact) {
+  if ( !key ) throw new Error("MUST SPECIFY KEY!")
+  var ybkey = [key,xact.bkey()].join(":")
+  return ybkey
+}
+
+function getTransactionClassifier(key,xact) {
+  var ybkey = getTransactionClassifierKey(key,xact)
+  return getClassifier(ybkey)
+}
+
+function getClassifier(ybkey) {
+  if ( !classifiers[ybkey] ) {
+    try {
+      classifiers[ybkey] = natural.BayesClassifier.restore(JSON.parse(fs.readFileSync(ybkey+'.json').toString()))
+      console.log("GOT CLASSIFIER FOR",ybkey)
+    } catch (e) {
+      console.log("ERROR READING CLASSIFIER",ybkey,'SO CREATING NEW ONE')
+      classifiers[ybkey] = new natural.BayesClassifier()
+      classifiers[ybkey].addDocument('This is not a document','unclassified')
+      classifiers[ybkey].train()
+    }
+  } else {
+    console.log("GOT EXISTING CLASSIFIER FOR",ybkey)
+  }
+  return classifiers[ybkey]
+}
+
+function saveClassifier(ybkey) {
+  console.log('saving',ybkey+'.json','...')
+  fs.writeFileSync(ybkey+'.json',JSON.stringify(classifiers[ybkey]))
+}
+
+function saveAllClassifiers() {
+  console.log("SAVING ALL")
+  _.each(_.keys(classifiers),function(ybkey) {
+    saveClassifier(ybkey)
+  })
+}
+
+
+
+function doTrain(key,xact) {
 
   if ( !key ) throw new Error("MUST SPECIFY KEY!")
 
@@ -228,45 +272,26 @@ function doTrain(key,xact,cb) {
   var pyear = moment(xact.date).year()
   var years = [pyear,pyear+1,pyear+2];
 
-  async.each(years,function(y, cb2) {
+  _.each(years,function(y) {
     var ybkey = [key,y,xact.acct()].join(":")
-    if ( !classifiers[ybkey] ) {
-      classifiers[ybkey] = new classifier.Bayesian({
-        backend: {
-          type: 'Redis',
-          options: {
-            hostname: 'localhost',   // default
-            port: 6379,              // default
-            name: ybkey // namespace for persisting
-          },
-          thresholds: {
-            "Expenses:Groceries:Food": 1,
-            "Expenses:Groceries:Alcohol": 3
-          }
-        }
-      });
-    }
+    var cl = getClassifier(ybkey)
 
     var xact_stripped = stripXact( xact );
     var val = JSON.stringify( xact_stripped )
-
-    classifiers[ybkey].train(xact.tkey(),
-                            val, function() {
-                              console.log("trained for ["+ybkey+"] '"+xact.tkey()+"' ->"+val);
-                              cb2()
-                            })
-  }, function(err) {
-    cb(err)
+             
+    cl.addDocument(xact.tkey(), val)
+    cl.train()
+    console.log("trained for ["+ybkey+"] '"+xact.tkey()+"' ->"+val);
   })
 }
 
 // scored difference between transactions
 function exDist(a, b) {
   // payee similarity, scaled by first payee length
-  var ld = new Levenshtein(a.payee.toUpperCase(),b.payee.toUpperCase()).distance/a.payee.length
+  var jwd = natural.JaroWinklerDistance(a.payee.toUpperCase(),b.payee.toUpperCase())/2.0
   // absolute pct distance (as a decimal) of the two amounts
-  var ad = Math.abs(b.amount() - a.amount())/Math.abs(a.amount())
-  return ld + ad
+  var ad = (1-Math.abs(b.amount() - a.amount())/Math.abs(_.max([b.amount(),a.amount()])))/2.0
+  return jwd + ad
 }
 
 exports.amountMeta = amountMeta;
@@ -275,4 +300,6 @@ exports.dp2date = dp2date;
 exports.stripXact = stripXact;
 exports.doTrain = doTrain;
 exports.getClassifier = getClassifier;
+exports.getTransactionClassifier = getTransactionClassifier;
 exports.exDist = exDist;
+exports.saveAllClassifiers = saveAllClassifiers

@@ -22,7 +22,9 @@ var Xact = require(__dirname+'/funcs.js').Xact;
 var dp2date = require(__dirname+'/funcs.js').dp2date;
 var stripXact = require(__dirname+'/funcs.js').stripXact;
 var doTrain = require(__dirname+'/funcs.js').doTrain;
+var getTransactionClassifier = require(__dirname+'/funcs.js').getTransactionClassifier;
 var getClassifier = require(__dirname+'/funcs.js').getClassifier;
+var saveAllClassifiers = require(__dirname+'/funcs.js').saveAllClassifiers;
 var exDist = require(__dirname+'/funcs.js').exDist;
 var dtf = "YYYY/MM/DD"
 var ynpatt = /^(y(es)?|no?)\s*$/i
@@ -603,7 +605,7 @@ async.waterfall([
                   existingsplits.push(xact_led)
 		});
 		existingsplits = existingsplits.sort(function(a,b) {
-                  return exDist(a,xact_ofx) - exDist(b,xact_ofx)
+                  return exDist(b,xact_ofx) - exDist(a,xact_ofx)
 		})
 		cbMatchExistingDone(null, existingsplits);
               })
@@ -612,35 +614,43 @@ async.waterfall([
             function bayesianMatch(exsplits, cbBayesianMatchDone) {
               if ( argv.verbose ) console.log("...BAYESIAN?".info)
 
-              var bayes = getClassifier(argv.key, xact_ofx)
+              var bayes = getTransactionClassifier(argv.key, xact_ofx)
+              //var bayes=getClassifier('household:2015:Liabilities:Credit Cards:AMEX True Earnings')
 
-              bayes.classify(tkey, function(category) {
-		if ( category === 'unclassified' ) {
-                  cbBayesianMatchDone(null, exsplits, null)
+	      var tkey = xact_ofx.tkey()
 
-		} else {
-                  var xact_bayes = _.merge(new Xact(),xact_ofx);
-                  var guess = _.pick(JSON.parse(category), function(v,k) { return k.match(/^(postings)/)})
-                  _.merge(xact_bayes, guess)
-                  xact_bayes.date = moment(xact_bayes.date)
-                  // expand fractions to amounts from the OFX
-                  var tot = xact_ofx.total()
-                  _.each(xact_bayes.postings, function(p) {
-                    p.amt.val = p.amt.val * tot
-                  });
+              console.log('TRY TRY TRY',tkey)
+
+              var category = bayes.classify(tkey)
+
+              console.log('MATCH MATCH MATCH',category)
+
+
+	      if ( category === 'unclassified' ) {
+                cbBayesianMatchDone(null, exsplits, null)
+
+	      } else {
+                var xact_bayes = _.merge(new Xact(),xact_ofx);
+                var guess = _.pick(JSON.parse(category), function(v,k) { return k.match(/^(postings)/)})
+                _.merge(xact_bayes, guess)
+                xact_bayes.date = moment(xact_bayes.date)
+                // expand fractions to amounts from the OFX
+                var tot = xact_ofx.total()
+                _.each(xact_bayes.postings, function(p) {
+                  p.amt.val = p.amt.val * tot
+                });
                   
-                  xact_bayes.metadata.source = 'bayes'
-                  if ( argv.verbose ) {
-                    console.log(JSON.stringify(xact_bayes))
-                    console.log(JSON.stringify(xact_bayes.targetpost()))
-                    console.log(JSON.stringify(xact_bayes.targetpost().metadata))
-                  }
-                  var tp = xact_bayes.targetpost()
-                  if ( !tp.metadata ) tp.metadata = {}
-                  tp.metadata.fitid = xact_ofx.fitid()
-                  cbBayesianMatchDone(null, exsplits, xact_bayes)
-		}
-              })
+                xact_bayes.metadata.source = 'bayes'
+                if ( argv.verbose ) {
+                  console.log(JSON.stringify(xact_bayes))
+                  console.log(JSON.stringify(xact_bayes.targetpost()))
+                  console.log(JSON.stringify(xact_bayes.targetpost().metadata))
+                }
+                var tp = xact_bayes.targetpost()
+                if ( !tp.metadata ) tp.metadata = {}
+                tp.metadata.fitid = xact_ofx.fitid()
+                cbBayesianMatchDone(null, exsplits, xact_bayes)
+	      }
             },
 
             function showOptions(exsplits, xact_bayes, cbShowOptionsDone) {
@@ -747,15 +757,8 @@ async.waterfall([
 
               if ( argv.train && !(xact_chosen.metadata.source=="rawofx") ) {
 		
-		doTrain(argv.key, xact_chosen, function(err) {
-                  if ( err ) {
-                    // hmm. train failed, but let's not die here...
-                    console.log("TRAIN FAILED: "+err)
-                    console.log("IGNORING AND CONTINUING")
-                    err = null;
-                  }
-                  cbTrainMatchDone(err, xact_chosen)
-		});
+		doTrain(argv.key, xact_chosen)
+                cbTrainMatchDone(null, xact_chosen)
               } else {
 		cbTrainMatchDone(null, xact_chosen)
               }
@@ -803,6 +806,9 @@ async.waterfall([
             if ( result.save.match(/^y/i) ) {
               // save it
               savexact( adds, file )
+
+              // save classifiers
+              saveAllClassifiers()
             }
 	    cbFindLedgerMatchesDone(null)
             
@@ -810,6 +816,7 @@ async.waterfall([
         } else {
           
           savexact( adds, file )
+          saveAllClassifiers()
 	  cbFindLedgerMatchesDone(null)
         }
       }
